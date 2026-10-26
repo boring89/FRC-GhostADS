@@ -226,6 +226,7 @@
   "net_heading_tol_deg": 180.0,
   "cage_approach_m": 0.25,
   "hp_net_success": 0.5,
+  "foul_cooldown_s": 3.0,
   "hp_throw_interval_s": 3.0,
   "piece_radius_m": {
    "coral": 0.09,

@@ -129,6 +129,30 @@ def test_zone_protection_foul(sim):
     assert sim.score[0, 0] >= 6 and sim.gs.fouls[0, 1] >= 6
 
 
+def _bounce_fouls(sim, steps=120):
+    """Red robot rams the protected blue robot, backs off, rams again, ... Returns the foul points assessed."""
+    g = sim.game
+    at_face(sim, 0, 0, 0, gap=0.05)
+    hx = sim.prm.half[0, 3, 0]
+    n = g.reef_n[0, 0]
+    p = g.reef_fc[0, 0] + n * (sim.prm.half[0, 0, 0] * 2 + 0.05 + hx + 0.3)
+    place(sim, 3, p, np.arctan2(-n[1], -n[0]))
+    st, gl = idle(sim)
+    for k in range(steps):
+        st[:, 3, 0] = -1.0 if (k // 10) % 2 == 0 else 1.0                    # 1 s in, 1 s out
+        run(sim, st, gl, 1)
+    return sim.gs.fouls[0, 1]
+
+
+def test_foul_cooldown_per_pair(sim):
+    capped = _bounce_fouls(sim)
+    assert 6 <= capped <= 6 * (12 // 3 + 1)                                # <= 1 foul per 3 s
+    sim.game.model["foul_cooldown_s"] = 0.0
+    sim.reset()
+    free = _bounce_fouls(sim)
+    assert free > capped
+
+
 def test_one_defender_rule(sim):
     g = sim.game
     place(sim, 0, [g.mid[0] + 2.0, 1.0], 0.0)

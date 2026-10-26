@@ -34,6 +34,7 @@ class State:
         self.score, self.fouls = z(n, 2), z(n, 2)
         self.prev_pair, self.prev_cage = b(n, len(PAIRS)), b(n, R, 6)
         self.g421_t = z(n, 2)
+        self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
 
 
 class Game(GameBase):
@@ -214,6 +215,7 @@ class Game(GameBase):
         st.cage_deep[idx] = prm.climb[idx] != 1                          # cage k <-> driver station k
         st.score[idx], st.fouls[idx] = 0, 0
         st.prev_pair[idx], st.prev_cage[idx], st.g421_t[idx] = False, False, 0
+        st.pair_last[idx] = -1e9
 
     # ------------------------------------------------------------------ geometry tests
     def _at_faces(self, pos, fwd, hx, fc, fn, half_w, facing):
@@ -412,6 +414,10 @@ class Game(GameBase):
         endgame = (t >= self.auto_s + self.teleop_s - self.endgame_s)[:, None]
         by_a = new & (in_own[:, b_] | (endgame & touching_own[:, b_]))                      # a hit protected b
         by_b = new & (in_own[:, a_] | (endgame & touching_own[:, a_]))
+        # at most one foul per robot pair per `foul_cooldown_s` (referees do not call every re-contact)
+        cd = (t[:, None] - st.pair_last) >= self.model.get("foul_cooldown_s", 3.0)
+        by_a, by_b = by_a & cd, by_b & cd
+        st.pair_last = np.where(by_a | by_b, t[:, None], st.pair_last)
         foul = (by_a @ EI.T + by_b @ EJ.T) * P["major_foul"]
         g418 = cage_c & ~own_cage & ~st.prev_cage & (~auto & live)[:, None, None]
         foul += g418.sum(-1) * P["major_foul"]

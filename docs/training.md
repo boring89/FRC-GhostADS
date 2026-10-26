@@ -11,6 +11,8 @@ uv run python -m ghosttrain.train --init runs/bc2/bc_net.pt --lr 1e-4 --ent_goal
 uv run python -m ghosttrain.evaluate runs/teacher/latest_net.pt --episodes 200   # 3. win rate vs baseline, both colours
 uv run python -m ghosttrain.replay runs/teacher/latest_net.pt --matches 10 --out runs/teacher/replays   # 4. videos + audit
 ```
+`uv run python -m ghosttrain.dashboard runs/teacher` serves live curves, an anomaly table and a live match at
+http://localhost:8777 (`--no-live` for curves only, `--host 0.0.0.0` for other machines).
 `--resume runs/teacher/iter_000500.pt` continues a run. `smoke/smoke_train.py` checks the pipeline in ~1 minute.
 
 ## Design
@@ -41,6 +43,12 @@ Target of the phase: > 80 %. Not reached yet; this is a ~35 minute run, the real
   per match within 30 iterations, with occasional spikes.
 - Rollouts of the trained policy still show robots stuck at walls for 40-50 % of a match (`stuck_wall`).
 - No conservation, out-of-bounds or score/state inconsistencies so far.
+
+## Foul cooldown (`game.json` model.foul_cooldown_s = 3.0)
+G427/G428 contact fouls are assessed at most once per robot pair per 3 s (modelling assumption, not a manual rule).
+Motivation: late-training anomalies were matches where the opponent conceded 200-324 foul points. Check on
+`runs/t1/iter_000150.pt` (stochastic policy, 192 matches): cooldown 0 -> win 0.586, cooldown 3 -> 0.612 (CIs overlap,
+~0.52-0.68), so the 60.9 % was *not* noticeably inflated by foul farming; the cap still removes the unrealistic spikes.
 
 ## Known issues / next steps
 - Goal entropy rises during PPO (0.07 -> 1.5). `ent_goal` 0.01 is probably too high; use 0.003 and compare.
