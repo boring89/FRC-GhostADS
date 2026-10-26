@@ -48,7 +48,7 @@ class TrainCfg:
     seed: int = 0
     out: str = "runs/teacher"
     log_every: int = 1
-    save_every: int = 50
+    save_every: int = 10
     init: str = ""                  # warm start (behaviour-cloned net); also seeds the league pool
     critic_warmup: int = 15          # iterations that train only the critic after a warm start
 
