@@ -176,7 +176,7 @@ func configure(h: Dictionary) -> void:
 	for j in k:
 		var vp := SubViewport.new()
 		vp.size = Vector2i(W, H)
-		vp.msaa_3d = Viewport.MSAA_DISABLED
+		vp.msaa_3d = [Viewport.MSAA_DISABLED, Viewport.MSAA_2X, Viewport.MSAA_4X, Viewport.MSAA_8X][clampi(int(h.get("msaa", 0)), 0, 3)]
 		vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		var cam := Camera3D.new()
 		cam.projection = Camera3D.PROJECTION_FRUSTUM

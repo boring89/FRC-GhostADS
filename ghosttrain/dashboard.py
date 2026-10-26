@@ -31,7 +31,8 @@ img{display:block;border-radius:4px;background:#000}
 <div class="row" id="charts"></div>
 <div class="row" style="margin-top:10px">
   <div class="card"><div class="small">live match (newest checkpoint) &mdash; <span id="live"></span></div>
-    <img id="stream" src="/stream.mjpg" width="640" height="360"></div>
+    <a href="/live" target="_blank"><img id="stream" src="/stream.mjpg" style="width:640px;height:360px" title="click: open fullscreen viewer"></a>
+    <div class="small"><a href="/live" target="_blank" style="color:#8ab4f8">open fullscreen viewer</a> (F or double-click toggles fullscreen)</div></div>
   <div class="card" style="min-width:420px"><div class="small">latest anomalies (score &gt; 250 or fouls &gt; 40)</div>
     <table id="anom"></table></div>
 </div>
@@ -76,12 +77,31 @@ tick();setInterval(tick,5000);
 </script></body></html>"""
 
 
+LIVE_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>GhostADS live</title><style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:none}
+img{width:100vw;height:100vh;object-fit:contain;display:block}
+#hud{position:fixed;left:8px;bottom:6px;color:#bbb;font:12px sans-serif;text-shadow:0 0 3px #000;transition:opacity .6s}
+</style></head><body>
+<img id="s" src="/stream.mjpg"><div id="hud">F / double-click: fullscreen</div>
+<script>
+const tg=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+addEventListener("keydown",e=>{if(e.key=="f"||e.key=="F")tg()});addEventListener("dblclick",tg);
+const hud=document.getElementById("hud");let tm;
+addEventListener("mousemove",()=>{hud.style.opacity=1;document.body.style.cursor="default";clearTimeout(tm);
+ tm=setTimeout(()=>{hud.style.opacity=0;document.body.style.cursor="none"},2500)});
+setInterval(async()=>{try{hud.textContent=(await (await fetch("/api/status")).json()).live+"   |   F / double-click: fullscreen"}catch(e){}},2000);
+</script></body></html>"""
+
+
 class Live:
     """Background thread: plays matches with the newest checkpoint and publishes JPEG frames."""
 
-    def __init__(self, run: Path, opponent="baseline", speed=1.0, seed=0, width=640, height=360):
+    def __init__(self, run: Path, opponent="baseline", speed=1.0, seed=0, width=1280, height=720, fps=25.0, msaa=2,
+                 jpeg_quality=88):
         self.run, self.opponent, self.speed, self.seed = run, opponent, speed, seed
-        self.w, self.h = width, height
+        self.w, self.h, self.msaa, self.jq = width, height, msaa, jpeg_quality
+        self.stride = int(np.clip(round(50.0 / fps), 1, 5))              # physics runs at 50 Hz (5 substeps / 0.1 s tick)
+        self.fps = 50.0 / self.stride
         self.cond = threading.Condition()
         self.frame = None
         self.seq = 0
@@ -127,7 +147,7 @@ class Live:
         keys = ("self", "others", "pieces", "pmask", "faces", "lm", "gmask")
         cam = spectator_rig(game, self.w, self.h)
         rc = RenderClient()
-        rc.configure(game, [cam], n_envs=1, width=self.w, height=self.h, max_cams=1)
+        rc.configure(game, [cam], n_envs=1, width=self.w, height=self.h, max_cams=1, msaa=self.msaa)
         match_no = 0
         while not self.stop:
             while not ckpt.exists():
@@ -146,26 +166,48 @@ class Live:
                               {**dr.sample_dr(rng), "crowd_density": 0.6})
             ticks = int(round((w.sim.end_t - w.sim.t[0]) / 0.1))
             ck_t = time.strftime("%H:%M:%S", time.localtime(mt))
+            snaps, count = [], [0]
+            sim = w.sim
+
+            def hook():                                           # keep every `stride`-th physics substep for rendering
+                count[0] += 1
+                if count[0] % self.stride == 0:
+                    snaps.append((sim.render_state(), float(sim.score[0, 0]), float(sim.score[0, 1]), float(sim.t[0])))
+            sim.substep_hook = hook
+            frame_dt, deadline, shown, t_fps = self.stride * 0.02 / self.speed, time.time(), 0, time.time()
+            scale = self.h / 360.0
+            name2 = "BASELINE" if self.opponent == "baseline" else "RED(self)"
             for k in range(ticks):
-                t0 = time.time()
                 t = {key: torch.from_numpy(np.ascontiguousarray(o[key])).to(dev).reshape(R, *o[key].shape[2:]) for key in keys}
                 t["glob"] = torch.from_numpy(o["glob"]).to(dev)[:, ALLIANCE].reshape(R, -1)
                 with torch.no_grad():
                     logits, mu, _ = net(t)
                     goal = torch.distributions.Categorical(logits=logits).sample().cpu().numpy().reshape(1, R)
                     stick = np.clip((mu + net.log_std.exp() * torch.randn_like(mu)).cpu().numpy().reshape(1, R, 3), -1, 1)
-                img, _ = rc.render(w.sim.render_state(), [(0, 0, 0)])
-                fr = np.ascontiguousarray(img[0][..., ::-1])
-                txt = f"BLUE(learner) {w.sim.score[0, 0]:.0f}  {'BASELINE' if self.opponent == 'baseline' else 'RED(self)'} {w.sim.score[0, 1]:.0f}   t={w.sim.t[0]:.0f}s"
-                cv2.putText(fr, txt, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 4)
-                cv2.putText(fr, txt, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-                self._publish(cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
-                self.info = f"match {match_no}, checkpoint saved {ck_t}, t={w.sim.t[0]:.0f}s"
+                snaps.clear()
                 res = w.step(stick, goal)
                 o = res["obs"]
+                for st, sb, sr, tt in snaps:
+                    img, _ = rc.render(st, [(0, 0, 0)])
+                    fr = np.ascontiguousarray(img[0][..., ::-1])
+                    txt = f"BLUE(learner) {sb:.0f}  {name2} {sr:.0f}   t={tt:.0f}s"
+                    cv2.putText(fr, txt, (int(10 * scale), int(24 * scale)), cv2.FONT_HERSHEY_SIMPLEX, 0.65 * scale, (0, 0, 0), max(2, int(4 * scale)))
+                    cv2.putText(fr, txt, (int(10 * scale), int(24 * scale)), cv2.FONT_HERSHEY_SIMPLEX, 0.65 * scale, (255, 255, 255), max(1, int(2 * scale)))
+                    self._publish(cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, self.jq])[1].tobytes())
+                    shown += 1
+                    now = time.time()
+                    if now - t_fps > 2:
+                        self.info = (f"match {match_no}, checkpoint saved {ck_t}, t={tt:.0f}s, {self.w}x{self.h}, "
+                                     f"{shown / (now - t_fps):.1f} fps (target {self.fps:.0f})")
+                        shown, t_fps = 0, now
+                    deadline += frame_dt
+                    if deadline < now:                            # renderer cannot keep up: play slower than real time
+                        deadline = now
+                    else:
+                        time.sleep(deadline - now)
                 if res["done"].any() or self.stop:
                     break
-                time.sleep(max(0.0, 0.1 / self.speed - (time.time() - t0)))
+            sim.substep_hook = None
 
 
 def make_handler(run: Path, live: Live | None):
@@ -198,6 +240,8 @@ def make_handler(run: Path, live: Live | None):
             n = int(dict(x.split("=") for x in q.split("&") if "=" in x).get("n", 1500))
             if path == "/":
                 self._send(PAGE.encode(), "text/html; charset=utf-8")
+            elif path == "/live":
+                self._send(LIVE_PAGE.encode(), "text/html; charset=utf-8")
             elif path == "/api/log":
                 self._send(json.dumps(self._rows("log.jsonl", n)).encode())
             elif path == "/api/anomalies":
@@ -234,9 +278,15 @@ def main(argv=None) -> int:
     ap.add_argument("--no-live", action="store_true")
     ap.add_argument("--opponent", default="baseline", choices=["baseline", "self"])
     ap.add_argument("--speed", type=float, default=1.0, help="playback speed of the live match (1 = real time)")
+    ap.add_argument("--width", type=int, default=1280, help="live view render width (default 1280x720)")
+    ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--fps", type=float, default=25.0, help="live view frame rate: 50/k for k=1..5 (50, 25, 16.7, 12.5, 10)")
+    ap.add_argument("--msaa", type=int, default=2, choices=[0, 1, 2, 3], help="anti-aliasing: 0 off, 1 2x, 2 4x, 3 8x")
+    ap.add_argument("--jpeg-quality", type=int, default=88)
     a = ap.parse_args(argv)
     run = Path(a.run)
-    live = None if a.no_live else Live(run, a.opponent, a.speed)
+    live = None if a.no_live else Live(run, a.opponent, a.speed, width=a.width, height=a.height, fps=a.fps,
+                                       msaa=a.msaa, jpeg_quality=a.jpeg_quality)
     if live:
         live.start()
     try:

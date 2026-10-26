@@ -12,7 +12,10 @@ uv run python -m ghosttrain.evaluate runs/teacher/latest_net.pt --episodes 200  
 uv run python -m ghosttrain.replay runs/teacher/latest_net.pt --matches 10 --out runs/teacher/replays   # 4. videos + audit
 ```
 `uv run python -m ghosttrain.dashboard runs/teacher` serves live curves, an anomaly table and a live match at
-http://localhost:8777 (`--no-live` for curves only, `--host 0.0.0.0` for other machines).
+http://localhost:8777 (`--no-live` for curves only, `--host 0.0.0.0` for other machines). Fullscreen viewer: http://localhost:8777/live
+(F or double-click). Live view defaults to 1280x720, 4x MSAA, 25 fps (`--width/--height/--fps/--msaa/--jpeg-quality`;
+fps = 50/k since physics runs at 50 Hz; every frame is a real physics substep, not an interpolation). While the
+trainer uses the GPU at 100 % the viewer reached ~16 fps at 720p (it then plays slower than real time).
 `--resume runs/teacher/iter_000500.pt` continues a run. `smoke/smoke_train.py` checks the pipeline in ~1 minute.
 
 ## Design

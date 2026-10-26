@@ -53,7 +53,7 @@ class RenderClient:
         protocol.send(self.sock, header, blob)
         return protocol.recv(self.sock)
 
-    def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto"):
+    def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto", msaa=0):
         """visual: "auto" (CAD model if game/<year>/visual/field.glb exists), "cad", or "proxy" (procedural)."""
         IN = 0.0254
         pc, f = game.cfg["pieces"], game.cfg["field"]
@@ -68,7 +68,7 @@ class RenderClient:
         h, _ = self._call({
             "type": "configure", "version": protocol.VERSION, "n_envs": n_envs, "width": width, "height": height,
             "max_cams": max_cams, "scene": game.scene(cad=use_cad), "rigs": self.rigs, "tag_bits": bits,
-            "visual_glb": str(glb) if use_cad else "",
+            "visual_glb": str(glb) if use_cad else "", "msaa": int(msaa),
             "pieces": {"mc": 126, "ma": 36, "coral_od": pc["coral"]["od"] * IN, "coral_len": pc["coral"]["length"] * IN,
                        "algae_d": pc["algae"]["diameter"] * IN, "cage_size": f["cages"]["size"] * IN,
                        "cage_h": f["cages"]["height"] * IN}})

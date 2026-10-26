@@ -59,6 +59,7 @@ class VecSim:
         self.end_t = g.auto_s + g.teleop_s
         self.t = np.zeros(n)
         self.auto_done = np.zeros(n, bool)
+        self.substep_hook = None                              # optional callable(), called after every physics substep (spectator views)
         self.tgt_az = np.zeros((n, R, 4))
         self.reset()
 
@@ -107,6 +108,8 @@ class VecSim:
             em = live & (self.t >= self.end_t - 1e-9)
             if em.any():
                 pts += g.end_match(self.gs, b, self.prm, em)
+            if self.substep_hook is not None:
+                self.substep_hook()
         return StepInfo(points=pts, fouls=fouls, bonus=bonus, done=self.t >= self.end_t - 1e-9)
 
     # ------------------------------------------------------------------ observations
