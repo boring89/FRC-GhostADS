@@ -7,3 +7,5 @@ runs/
 data/
 tools/godot/
 ghostrender/godot/.godot/
+REEFSCAPE FIELD*.glb
+game/2025/visual/

@@ -23,6 +23,7 @@ var atlas_cols := 1
 var pieces := {}
 var tag_bits := {}
 var post_shader: Shader
+var visual_template: Node3D
 
 
 func _ready() -> void:
@@ -129,6 +130,19 @@ func configure(h: Dictionary) -> void:
 	W = int(h["width"])
 	H = int(h["height"])
 	pieces = h["pieces"]
+	if visual_template:
+		visual_template.queue_free()
+		visual_template = null
+	var glb: String = h.get("visual_glb", "")
+	if glb != "":
+		var doc := GLTFDocument.new()
+		var gst := GLTFState.new()
+		var gerr := doc.append_from_file(glb, gst)
+		if gerr != OK:
+			push_error("GLB load failed: %s (%d)" % [glb, gerr])
+		else:
+			visual_template = doc.generate_scene(gst)
+			print("GHOST_RENDER_GLB_OK ", glb)
 	rigs = h["rigs"]
 	tag_bits = h["tag_bits"]
 	for e in envs:
@@ -192,6 +206,15 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 		mats[k] = mat(MAT_COLORS[k], 0.85, 0.3 if k in ["truss", "station", "processor", "guardrail"] else 0.0)
 	var stat := Node3D.new()
 	vp.add_child(stat)
+	if visual_template:
+		var vis := visual_template.duplicate()
+		stat.add_child(vis)
+		for c in vis.get_children():
+			if c is MeshInstance3D:
+				if c.name.begins_with("carpet"):
+					c.material_override = mats["carpet"]
+				else:
+					(c as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	for p in scene["primitives"]:
 		stat.add_child(build_primitive(p, mats, tags_tex))
 	var env := WorldEnvironment.new()

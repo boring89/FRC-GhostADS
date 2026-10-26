@@ -53,7 +53,8 @@ class Game(GameBase):
         tn = lambda i: np.array([np.cos(tags[i]["yaw"]), np.sin(tags[i]["yaw"])])
 
         # field boundary: 4 walls + coral-station chamfers through the station tags
-        hn, ho = [[1, 0], [-1, 0], [0, 1], [0, -1]], [0.0, -L, 0.0, -W]
+        gi = f.get("guardrail_inset_m", 0.0)
+        hn, ho = [[1, 0], [-1, 0], [0, 1], [0, -1]], [0.0, -L, gi, -(W - gi)]
         for a in ("blue", "red"):
             for i in f["coral_station_tags"][a]:
                 hn.append(tn(i)); ho.append(float(tn(i) @ txy(i)))
@@ -309,7 +310,7 @@ class Game(GameBase):
 
         c = np.zeros((n, R), bool)
         sel = lambda g: goal == gi[g]
-        c |= sel("coral_station") & ~st.hold_coral & (sta >= 0) & (st.stock[env[:, None], al] > 0)
+        c |= sel("coral_station") & ~st.hold_coral & prm.station & (sta >= 0) & (st.stock[env[:, None], al] > 0)
         c |= sel("coral_floor") & ~st.hold_coral & prm.floor_coral & cfloor.any(-1)
         c |= sel("algae_floor") & ~st.hold_algae & prm.floor_algae & afloor.any(-1)
         c |= sel("algae_reef") & prm.algae_reef & at_reef & ralg
@@ -502,8 +503,9 @@ class Game(GameBase):
         robots_z = st.climbed * 0.25
         return {"coral": coral, "algae": algae, "cages": cages, "robot_z": robots_z.astype(np.float32)}
 
-    def scene(self):
-        """Static primitives for the renderer (field frame, metres)."""
+    def scene(self, cad=False):
+        """Static primitives for the renderer (field frame, metres). cad=True: the structure comes from the
+        optimised CAD model (visual/field.glb); only the AprilTags (placed from the tag file) remain."""
         f = self.cfg["field"]
         L, W = self.length, self.width
         mx, my = self.mid
@@ -554,4 +556,6 @@ class Game(GameBase):
         for i, tg in sorted(self.tags.items()):
             P.append({"kind": "tag", "id": int(i), "pos": list(map(float, tg["pos"])), "quat_wxyz": list(map(float, tg["quat"])),
                       "size": f["tags"]["black_square"] * IN, "panel": f["tags"]["panel"] * IN})
+        if cad:
+            P = [p for p in P if p["kind"] == "tag"]
         return {"field": [L, W], "primitives": P}

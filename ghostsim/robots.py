@@ -12,6 +12,7 @@ R = 6
 ALLIANCE = np.array([0, 0, 0, 1, 1, 1])
 LEVELS = ("L1", "L2", "L3", "L4")
 ROOT = Path(__file__).resolve().parents[1]
+IN = 0.0254
 
 
 def load_profile(path) -> dict:
@@ -23,7 +24,7 @@ def load_profile(path) -> dict:
         base = load_profile(path.parent / d["base"])
         base.update({"randomize": d})
         d = base
-    if not d.get("verified", False) and "randomize" not in d:
+    if not d.get("verified", False) and "base" not in d:
         warnings.warn(f"{path.name}: robot profile contains unverified placeholder values", stacklevel=2)
     return d
 
@@ -36,7 +37,7 @@ class RobotParams:
     steer_rate: np.ndarray; mu_s: np.ndarray; mu_k: np.ndarray
     v_oc: np.ndarray; r_int: np.ndarray; other_load: np.ndarray
     max_v: np.ndarray; max_w: np.ndarray; deadband: np.ndarray
-    levels: np.ndarray; floor_coral: np.ndarray; floor_algae: np.ndarray; algae_reef: np.ndarray
+    levels: np.ndarray; station: np.ndarray; floor_coral: np.ndarray; floor_algae: np.ndarray; algae_reef: np.ndarray
     processor: np.ndarray; net: np.ndarray; climb: np.ndarray; station_side: np.ndarray
     times: np.ndarray; intake_depth: np.ndarray; intake_half_width: np.ndarray
 
@@ -50,37 +51,35 @@ def _get(d, key):
     return d
 
 
-def sample_params(profiles: list[dict], n: int, goals: list[str], rng) -> RobotParams:
-    """profiles: one dict per robot slot (len R)."""
+def sample_params(profiles: list[dict], n: int, goals: list[str], rng, randomize: bool = True) -> RobotParams:
+    """profiles: one dict per robot slot (len R). randomize=False gives the nominal values of the base profile
+    (used for calibration and deterministic tests)."""
     out = {}
     for r, p in enumerate(profiles):
-        rnd = p.get("randomize", {})
+        rnd = p.get("randomize", {}) if randomize else {}
         uni = rnd.get("uniform", {})
         cap = rnd.get("capability_p")
 
-        def num(key, e=None, p=p, uni=uni):
-            if key in uni:
-                return rng.uniform(*uni[key])
-            return float(_get(p, key))
+        def num(key, uni=uni, p=p):
+            return rng.uniform(*uni[key]) if key in uni else float(_get(p, key))
 
+        bt = p["bumper_t_in"] * IN
         for e in range(n):
-            side = rng.uniform(*uni["bumper_side_m"]) if "bumper_side_m" in uni else None
-            half = np.array([side, side]) / 2 if side else np.array(p["bumper_outer_m"]) / 2
-            scale = (half * 2 - 0.16) / (np.array(p["bumper_outer_m"]) - 0.16)   # module spacing follows frame
-            offs = np.array(p["module_offsets_m"]) * scale
+            frame = num("frame_in") * IN
+            half = np.full(2, frame / 2 + bt)
+            offs = np.array([[1, 1], [1, -1], [-1, 1], [-1, -1]]) * (frame / 2 - p["module_inset_m"])
             mass = num("mass_kg")
             dr, ctl, mech = p["drive"], p["control"], p["mechanism"]
+            free = num("drive.free_speed_mps")
             vals = {
                 "mass": mass, "inertia": mass * ((2 * half) ** 2).sum() / 12.0, "half": half,
                 "height": num("height_m"), "offsets": offs,
-                "free_speed": num("drive.free_speed_mps"), "stall_force": dr["stall_force_N"],
-                "stall_current": dr["stall_current_A"],
+                "free_speed": free, "stall_force": dr["stall_force_N"], "stall_current": dr["stall_current_A"],
                 "force_limit": dr["stall_force_N"] * num("drive.current_limit_A") / dr["stall_current_A"],
                 "steer_rate": dr["steer_rate_radps"], "mu_s": num("drive.mu_static"),
                 "mu_k": dr["mu_kinetic"] * num("drive.mu_static") / dr["mu_static"],
-                "v_oc": p["battery"]["v_oc"], "r_int": p["battery"]["r_int_ohm"],
-                "other_load": p["battery"]["other_load_A"],
-                "max_v": num("control.max_speed_mps"), "max_w": num("control.max_omega_radps"),
+                "v_oc": p["battery"]["v_oc"], "r_int": p["battery"]["r_int_ohm"], "other_load": p["battery"]["other_load_A"],
+                "max_v": min(num("control.max_speed_mps"), 0.95 * free), "max_w": num("control.max_omega_radps"),
                 "deadband": ctl["deadband"],
                 "station_side": 1.0 if mech["station_side"] == "front" else -1.0,
                 "intake_depth": mech["intake_depth_m"], "intake_half_width": mech["intake_half_width_m"],
@@ -89,12 +88,12 @@ def sample_params(profiles: list[dict], n: int, goals: list[str], rng) -> RobotP
             vals["times"] = np.array([mech["times_s"].get(g, 0.0) * ts for g in goals])
             if cap:
                 lv = np.array([rng.random() < cap[l] for l in LEVELS])
-                c = {k: rng.random() < cap[k] for k in ("floor_coral", "floor_algae", "algae_reef", "processor", "net")}
+                c = {k: rng.random() < cap[k] for k in ("station", "floor_coral", "floor_algae", "algae_reef", "processor", "net")}
                 u = rng.random()
                 climb = 2 if u < cap["climb_deep"] else (1 if u < cap["climb_deep"] + cap["climb_shallow"] else 0)
             else:
                 lv = np.array([i + 1 in mech["levels"] for i in range(4)])
-                c = {k: bool(mech[k]) for k in ("floor_coral", "floor_algae", "algae_reef", "processor", "net")}
+                c = {k: bool(mech[k]) for k in ("station", "floor_coral", "floor_algae", "algae_reef", "processor", "net")}
                 climb = {"none": 0, "shallow": 1, "deep": 2}[mech["climb"]]
             vals.update(levels=lv, climb=climb, **c)
             for k, v in vals.items():

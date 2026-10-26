@@ -24,6 +24,7 @@ class SimCfg:
     slots: tuple = ("ours", "others", "others", "others", "others", "others")
     vision: tuple = (0,)                          # robots with full AprilTag visibility simulation
     sensors: bool = True                          # False: teacher training (privileged state only)
+    randomize: bool = True                        # per-episode robot parameter randomisation (False: nominal values)
     start_mode: str | None = None                 # "teleop" / "auto" (default from game.json)
     phys: PhysCfg = field(default_factory=PhysCfg)
 
@@ -45,7 +46,7 @@ class VecSim:
         ours, others = load_profile("ours.json"), load_profile("others.json")
         self.ours = ours
         self.profiles = [ours if s == "ours" else others for s in cfg.slots]
-        self.prm = sample_params(self.profiles, n, g.goals, self.rng)
+        self.prm = sample_params(self.profiles, n, g.goals, self.rng, cfg.randomize)
         self.phys = Physics(g.polys, g.hp_n, g.hp_off, cfg.phys)
         self.body = self.phys.new_body(n)
         self.gs = g.new_state(n)
@@ -67,7 +68,7 @@ class VecSim:
         idx = np.arange(n) if mask is None else np.flatnonzero(mask)
         if len(idx) == 0:
             return
-        new = sample_params(self.profiles, len(idx), self.game.goals, self.rng)
+        new = sample_params(self.profiles, len(idx), self.game.goals, self.rng, self.cfg.randomize)
         for f in fields(new):
             getattr(self.prm, f.name)[idx] = getattr(new, f.name)
         self.game.reset(self.gs, idx, self.body, self.prm, self.rng, self.mode)

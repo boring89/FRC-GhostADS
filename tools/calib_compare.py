@@ -52,7 +52,7 @@ def simulate(profile="ours.json", seconds=(2.5, 2.0)):
     from ghostsim import SimCfg, VecSim
     out = []
     for test, T in zip(("straight", "spin"), seconds):
-        sim = VecSim(SimCfg(n_envs=1, sensors=False, substeps=1, slots=("ours",) * 6, seed=0))
+        sim = VecSim(SimCfg(n_envs=1, sensors=False, substeps=1, slots=("ours",) * 6, seed=0, randomize=False))
         b = sim.body
         far = np.array([[2.0, 7.4], [2.0, 0.7], [15.5, 7.4], [15.5, 0.7], [12.0, 7.4]])
         b.pose[0, 1:, :2] = far

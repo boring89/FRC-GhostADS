@@ -1,84 +1,245 @@
 {
-  "schema_version": 2,
-  "name": "2025-reefscape",
-  "rules_module": "rules.py",
-  "sources": {
-    "manual": "2025 Game Manual (REEFSCAPE)",
-    "drawing": "FE-2025 Field Layout and Marking rev C",
-    "tags": "WPILib v2025.3.2 apriltag resources (identical to FE-2025 sheet 4)"
+ "schema_version": 2,
+ "name": "2025-reefscape",
+ "rules_module": "rules.py",
+ "sources": {
+  "manual": "2025 Game Manual (REEFSCAPE)",
+  "drawing": "FE-2025 Field Layout and Marking rev C",
+  "tags": "WPILib v2025.3.2 apriltag resources (identical to FE-2025 sheet 4)"
+ },
+ "_units": "Everything under 'field' and 'pieces' is in INCHES (as in the drawings). 'model' is SI.",
+ "field": {
+  "length": 690.875,
+  "width": 317.0,
+  "tags": {
+   "welded": "apriltags-welded.json",
+   "andymark": "apriltags-andymark.json",
+   "default": "welded",
+   "black_square": 6.5,
+   "panel": 10.5
   },
-  "_units": "Everything under 'field' and 'pieces' is in INCHES (as in the drawings). 'model' is SI.",
-
-  "field": {
-    "length": 690.875,
-    "width": 317.0,
-    "tags": {"welded": "apriltags-welded.json", "andymark": "apriltags-andymark.json", "default": "welded", "black_square": 6.5, "panel": 10.5},
-    "coral_station_tags": {"blue": [12, 13], "red": [1, 2]},
-    "processor_tags": {"blue": 16, "red": 3},
-    "reef_tags": {"blue": [18, 17, 22, 21, 20, 19], "red": [7, 8, 9, 10, 11, 6]},
-    "reef": {
-      "_note": "reef_tags are listed face 0..5: face 0 faces the alliance wall, then CCW seen from above (blue). Red is the 180 deg rotation of blue.",
-      "zone_offset": 14.0,
-      "pipe_spacing": 13.0,
-      "trough_height": 18.0,
-      "branch_top": {"L2": 31.875, "L3": 47.625, "L4": 72.0},
-      "branch_inset": {"L2": 1.625, "L3": 1.625, "L4": 1.125},
-      "branch_angle_deg": {"L2": 35.0, "L3": 35.0, "L4": 90.0}
-    },
-    "starting_line_x_blue": 297.49,
-    "_starting_line": "reef face 209.49 + 88 (manual 5.2); matches FE-2025 sheet 5 (61.76 from processor centre 235.73)",
-    "coral_marks": {"x_from_wall": 48.0, "y": [86.5, 158.5, 230.5]},
-    "barge": {"depth": 44.0, "truss_height": 62.0, "height": 101.0,
-              "center_support": [12.0, 24.0],
-              "_center_support": "ESTIMATED from FE-2025 sheet 3 image; verify against GE-25200"},
-    "cages": {"offsets": [41.5, 84.375, 127.375], "size": 7.375, "height": 24.0,
-              "bottom": {"deep": 3.125, "shallow": 30.125},
-              "_note": "hang on the barge centreline (x = length/2); blue at y > width/2, red at y < width/2 (FE-2025 sheet 4 tags 14/15)"},
-    "barge_zone": {"depth": 46.0, "length": 146.5},
-    "processor_opening": {"width": 28.0, "height": 20.0, "z": 7.0},
-    "coral_station_opening": {"width": 76.0, "height": 7.0, "z": 37.5}
+  "coral_station_tags": {
+   "blue": [
+    12,
+    13
+   ],
+   "red": [
+    1,
+    2
+   ]
   },
-
-  "pieces": {
-    "coral": {"length": 11.875, "od": 4.5, "id": 4.0, "count": 126, "preload": 1, "floor_slots": 12},
-    "algae": {"diameter": 16.25, "count": 18, "on_reef": 12, "floor_slots": 18}
+  "processor_tags": {
+   "blue": 16,
+   "red": 3
   },
-
-  "points": {
-    "_note": "[auto, teleop] from manual Table 6-2",
-    "leave": [3, 0],
-    "coral": {"L1": [3, 2], "L2": [4, 3], "L3": [6, 4], "L4": [7, 5]},
-    "processor": [6, 6],
-    "net": [4, 4],
-    "park": 2,
-    "cage": {"shallow": 6, "deep": 12},
-    "minor_foul": 2,
-    "major_foul": 6
+  "reef_tags": {
+   "blue": [
+    18,
+    17,
+    22,
+    21,
+    20,
+    19
+   ],
+   "red": [
+    7,
+    8,
+    9,
+    10,
+    11,
+    6
+   ]
   },
-
-  "match": {"auto_s": 15.0, "teleop_s": 135.0, "endgame_s": 20.0, "start_mode": "teleop"},
-
-  "goals": ["idle", "coral_station", "coral_floor", "algae_floor", "algae_reef",
-            "score_L1", "score_L2", "score_L3", "score_L4",
-            "processor", "net", "climb", "defend"],
-
-  "model": {
-    "_note": "MODELLING ASSUMPTIONS (not in the manual). SI units. Confirmed with team lead 2026-10-26.",
-    "reef_algae_high_faces": [0, 2, 4],
-    "algae_blocks": {"low": ["L2", "L3"], "high": ["L3"]},
-    "l1_capacity_per_face": 3,
-    "approach_m": 0.30,
-    "lateral_tol_m": 0.40,
-    "heading_tol_deg": 25.0,
-    "net_zone_dx_m": [0.75, 1.75],
-    "net_heading_tol_deg": 180.0,
-    "cage_approach_m": 0.25,
-    "hp_net_success": 0.5,
-    "hp_throw_interval_s": 3.0,
-    "piece_radius_m": {"coral": 0.09, "algae": 0.206},
-    "piece_decel_mps2": {"coral": 3.0, "algae": 0.6},
-    "piece_restitution": {"coral": 0.1, "algae": 0.5},
-    "contact_margin_m": 0.01,
-    "cages_rigid": true
+  "reef": {
+   "_note": "reef_tags are listed face 0..5: face 0 faces the alliance wall, then CCW seen from above (blue). Red is the 180 deg rotation of blue.",
+   "zone_offset": 14.0,
+   "pipe_spacing": 13.0,
+   "trough_height": 18.0,
+   "branch_top": {
+    "L2": 31.875,
+    "L3": 47.625,
+    "L4": 72.0
+   },
+   "branch_inset": {
+    "L2": 1.625,
+    "L3": 1.625,
+    "L4": 1.125
+   },
+   "branch_angle_deg": {
+    "L2": 35.0,
+    "L3": 35.0,
+    "L4": 90.0
+   }
+  },
+  "starting_line_x_blue": 297.49,
+  "_starting_line": "reef face 209.49 + 88 (manual 5.2); matches FE-2025 sheet 5 (61.76 from processor centre 235.73)",
+  "coral_marks": {
+   "x_from_wall": 48.0,
+   "y": [
+    86.5,
+    158.5,
+    230.5
+   ]
+  },
+  "barge": {
+   "depth": 44.0,
+   "truss_height": 62.0,
+   "height": 101.0,
+   "center_support": [
+    12.0,
+    12.0
+   ],
+   "_center_support": "MEASURED from the official CAD (FE-2025 glb): truss footprint x 8.621..8.926 m, y 3.874..4.179 m = 12 x 12 in. (A 24x24 in, 3-6 mm base plate underneath is drivable.)"
+  },
+  "cages": {
+   "offsets": [
+    41.5,
+    84.375,
+    127.375
+   ],
+   "size": 7.375,
+   "height": 24.0,
+   "bottom": {
+    "deep": 3.125,
+    "shallow": 30.125
+   },
+   "_note": "hang on the barge centreline (x = length/2); blue at y > width/2, red below. CAD: centres at 41.5/84.4/127.3 in from mid-field; middle cage shallow (bottom 30.1 in), outer two deep (3.1 in)."
+  },
+  "barge_zone": {
+   "depth": 46.0,
+   "length": 146.5
+  },
+  "processor_opening": {
+   "width": 28.0,
+   "height": 20.0,
+   "z": 7.0
+  },
+  "coral_station_opening": {
+   "width": 76.0,
+   "height": 7.0,
+   "z": 37.5
+  },
+  "guardrail_inset_m": 0.027,
+  "_guardrail_inset_m": "MEASURED from the official CAD (tools/check_field.py): guardrail inner faces are 2.7 cm inside the 317 in width from the tag file; the alliance walls match exactly."
+ },
+ "pieces": {
+  "coral": {
+   "length": 11.875,
+   "od": 4.5,
+   "id": 4.0,
+   "count": 126,
+   "preload": 1,
+   "floor_slots": 12
+  },
+  "algae": {
+   "diameter": 16.25,
+   "count": 18,
+   "on_reef": 12,
+   "floor_slots": 18
   }
+ },
+ "points": {
+  "_note": "[auto, teleop] from manual Table 6-2",
+  "leave": [
+   3,
+   0
+  ],
+  "coral": {
+   "L1": [
+    3,
+    2
+   ],
+   "L2": [
+    4,
+    3
+   ],
+   "L3": [
+    6,
+    4
+   ],
+   "L4": [
+    7,
+    5
+   ]
+  },
+  "processor": [
+   6,
+   6
+  ],
+  "net": [
+   4,
+   4
+  ],
+  "park": 2,
+  "cage": {
+   "shallow": 6,
+   "deep": 12
+  },
+  "minor_foul": 2,
+  "major_foul": 6
+ },
+ "match": {
+  "auto_s": 15.0,
+  "teleop_s": 135.0,
+  "endgame_s": 20.0,
+  "start_mode": "teleop"
+ },
+ "goals": [
+  "idle",
+  "coral_station",
+  "coral_floor",
+  "algae_floor",
+  "algae_reef",
+  "score_L1",
+  "score_L2",
+  "score_L3",
+  "score_L4",
+  "processor",
+  "net",
+  "climb",
+  "defend"
+ ],
+ "model": {
+  "_note": "MODELLING ASSUMPTIONS (not in the manual). SI units. Confirmed with team lead 2026-10-26.",
+  "reef_algae_high_faces": [
+   0,
+   2,
+   4
+  ],
+  "algae_blocks": {
+   "low": [
+    "L2",
+    "L3"
+   ],
+   "high": [
+    "L3"
+   ]
+  },
+  "l1_capacity_per_face": 3,
+  "approach_m": 0.3,
+  "lateral_tol_m": 0.4,
+  "heading_tol_deg": 25.0,
+  "net_zone_dx_m": [
+   0.75,
+   1.75
+  ],
+  "net_heading_tol_deg": 180.0,
+  "cage_approach_m": 0.25,
+  "hp_net_success": 0.5,
+  "hp_throw_interval_s": 3.0,
+  "piece_radius_m": {
+   "coral": 0.09,
+   "algae": 0.206
+  },
+  "piece_decel_mps2": {
+   "coral": 3.0,
+   "algae": 0.6
+  },
+  "piece_restitution": {
+   "coral": 0.1,
+   "algae": 0.5
+  },
+  "contact_margin_m": 0.01,
+  "cages_rigid": true
+ }
 }

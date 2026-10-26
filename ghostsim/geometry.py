@@ -79,7 +79,7 @@ class Polygons:
             bad = np.isnan(n[i, :, 0])
             n[i, bad] = n[i, ~bad][0]
         self.V, self.N = V, n
-        self.center = V.mean(1)
+        self.center = np.array([np.asarray(p, float).mean(0) for p in polys])     # real vertices only (V is padded)
         self.radius = np.linalg.norm(V - self.center[:, None], axis=-1).max(1)
         proj = np.einsum("pkd,pjd->pkj", n, V)              # (P, axis k, vertex j)
         self.own_min, self.own_max = proj.min(-1), proj.max(-1)

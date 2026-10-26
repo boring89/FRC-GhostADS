@@ -1,28 +1,28 @@
 # Field geometry: collision vs visual
 
 ## Collision geometry (physics, occlusion, rules) — source of truth
-- `game/2025/game.json` (inches, values from the manual and FE-2025) + `apriltags-welded.json` (WPILib).
-- `rules.py` derives everything else: field boundary = 4 walls + coral-station chamfers through tags 1/2/12/13;
-  reef hexagon centre/apothem from reef tags; zones, cages, coral marks, starting line from game.json.
-- AndyMark fields: `SimCfg(tags="andymark")` swaps the tag file (positions differ slightly, Team Update 12).
+- `game/2025/game.json` (inches, from the manual and FE-2025) + `apriltags-welded.json` (WPILib).
+- `rules.py` derives the rest: boundary = 4 walls + coral-station chamfers through tags 1/2/12/13;
+  reef hexagon from the reef tags; zones, cages, coral marks, starting line from game.json.
+- AndyMark fields: `SimCfg(tags="andymark")` swaps the tag file (Team Update 12).
+- Values measured from the official CAD (see `tools/check_field.py`): barge centre support 12 x 12 in,
+  guardrail inner faces 2.7 cm inside the 317 in width, cage layout (middle cage shallow, outer two deep).
 
 ## Visual geometry (renderer)
-Current: a **procedural proxy scene** generated from the same definition (`Game.scene()` → Godot primitives:
-carpet, walls, coral stations, processors, reef prisms + pipes, barge, cages, tape lines, tag panels with
-tag36h11 bits). Because Python generates it, it is consistent with physics by construction
-(checked by `smoke/smoke_consistency.py`).
+`ghostrender` uses the optimised CAD model when `game/2025/visual/field.glb` exists, otherwise the
+procedural proxy scene generated from the same definition (`SimCfg`-independent, `visual="auto"|"cad"|"proxy"`).
 
-Optional higher-fidelity model from the official CAD (NOT implemented yet — needs a GLB loader in
-`main.gd` and `tools/check_field.py`):
-1. Download the official 2025 field CAD from the FIRST "REEFSCAPE Playing FIELD" page.
-2. Import into Blender (STEP importer add-on, or FreeCAD → glTF). I have not verified which importer
-   handles this assembly best, or whether Onshape's glTF export is usable — test both.
-3. Simplify: delete fasteners and small hardware, decimate to < 300 k triangles, assign the material
-   classes used by the renderer (carpet, guardrail, alliance_wall, station, processor, reef_base,
-   reef_pipe, barge, truss, tape_*). Do not include tags (the renderer places them from the tag file).
-4. Put the origin at the WPILib field origin (blue alliance-wall diamond plate, scoring-table border),
-   +X toward red, +Z up in Blender (the glTF exporter converts to Y-up).
-5. Name obstacle meshes `col_<poly_id>` (`reef_blue`, `reef_red`, `barge_support`, `cage_0..5`).
-6. Export `game/2025/visual/field.glb` (use git LFS).
-7. Verify: `tools/check_field.py` (to be written) compares `col_*` bounds with `Game.polys` (≤ 2 cm),
-   then run `smoke/smoke_consistency.py`.
+### Regenerating the CAD visual (source: official Onshape GLB, 947 k unique / 5.3 M drawn triangles)
+```
+uv run python tools/prepare_field.py            # finds REEFSCAPE FIELD*.glb in the repo root, ~10 s
+uv run python tools/check_field.py              # cross-checks CAD vs tags / cages / barge support / reef
+```
+`prepare_field.py` removes AprilTags (FE-00083), the six CAGE assemblies, leftover CORAL/ALGAE, the scoring table
+and parts < 4 cm; merges the ~54 000 remaining instances into one mesh per material (carpet is separate so
+domain randomisation can recolour it), decimates to ~300 k triangles, and writes Y-up glTF.
+The source (51 MB) and the output (~30 MB) are not committed (add git LFS if the team wants them in the repo).
+
+Source frame (verified against the tag file to 5 mm): metres, Z up, origin at the field centre, +X toward red.
+Quality notes: thin reef pipes get coarse at this budget (invisible at 160x120); the polycarbonate guardrail is
+modelled opaque in the source, so cameras cannot see through it (they can on the real field).
+Rendering cost: 24 cameras at 160x120 -> ~500 images/s with CAD vs ~720 with the proxy scene.

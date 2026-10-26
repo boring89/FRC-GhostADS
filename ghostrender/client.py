@@ -52,15 +52,22 @@ class RenderClient:
         protocol.send(self.sock, header, blob)
         return protocol.recv(self.sock)
 
-    def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24):
+    def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto"):
+        """visual: "auto" (CAD model if game/<year>/visual/field.glb exists), "cad", or "proxy" (procedural)."""
         IN = 0.0254
         pc, f = game.cfg["pieces"], game.cfg["field"]
         bits = json.loads((game.dir / "tag36h11_bits.json").read_text())["bits"]
+        glb = game.dir / "visual" / "field.glb"
+        use_cad = visual == "cad" or (visual == "auto" and glb.exists())
+        if use_cad and not glb.exists():
+            raise FileNotFoundError(f"{glb} missing: run tools/prepare_field.py")
+        self.visual = "cad" if use_cad else "proxy"
         self.W, self.H, self.n_envs, self.cameras = width, height, n_envs, cameras
         self.rigs = [rig_dict(c) for c in cameras]
         h, _ = self._call({
             "type": "configure", "version": protocol.VERSION, "n_envs": n_envs, "width": width, "height": height,
-            "max_cams": max_cams, "scene": game.scene(), "rigs": self.rigs, "tag_bits": bits,
+            "max_cams": max_cams, "scene": game.scene(cad=use_cad), "rigs": self.rigs, "tag_bits": bits,
+            "visual_glb": str(glb) if use_cad else "",
             "pieces": {"mc": 126, "ma": 36, "coral_od": pc["coral"]["od"] * IN, "coral_len": pc["coral"]["length"] * IN,
                        "algae_d": pc["algae"]["diameter"] * IN, "cage_size": f["cages"]["size"] * IN,
                        "cage_h": f["cages"]["height"] * IN}})
