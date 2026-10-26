@@ -53,6 +53,16 @@ Motivation: late-training anomalies were matches where the opponent conceded 200
 `runs/t1/iter_000150.pt` (stochastic policy, 192 matches): cooldown 0 -> win 0.586, cooldown 3 -> 0.612 (CIs overlap,
 ~0.52-0.68), so the 60.9 % was *not* noticeably inflated by foul farming; the cap still removes the unrealistic spikes.
 
+## Teammate intent (ghosttrain/intent.py)
+A separate predictor guesses each ally's current goal from what the teammate can observe (its ego-frame pose,
+velocity, holding flags, capabilities, time left). Its 13-way probability vector is appended to the ally rows of
+the teacher observation (`others`, now 36 features; opponents get zeros). Weights: `ghosttrain/intent_weights.npz`.
+- Data: baseline vs baseline, 96 envs x 1500 ticks (train) and 32 envs (validation, other seed).
+- Validation: accuracy 0.80 (majority class 0.25); recall for scoring-type goals 0.95, precision 0.94.
+- Limit: trained on baseline teammates only. Learner teammates behave differently: retrain on learner rollouts
+  before relying on it (collection currently supports the baseline only).
+- Changing the observation size means the teacher must be trained from scratch.
+
 ## Known issues / next steps
 - Goal entropy rises during PPO (0.07 -> 1.5). `ent_goal` 0.01 is probably too high; use 0.003 and compare.
 - The baseline's own fouls and stuck behaviour limit the BC start; league self-play should move past it.

@@ -4,7 +4,8 @@ The field is 180-degree rotationally symmetric, so every viewer sees the world a
 (red: p -> [L, W] - p, angles + pi). Features are entity sets so the network does not depend on slot order:
 
   self      (N,R,S)        own state, capabilities, current goal one-hot, timers, scores
-  others    (N,R,5,Fo)     2 allies then 3 opponents, in the ego frame
+  others    (N,R,5,Fo)     2 allies then 3 opponents, in the ego frame; Fo = 23 features + 13 intent
+                           probabilities (allies only, from ghosttrain/intent.py, zeros for opponents)
   pieces    (N,R,30,Fp)    12 floor coral + 18 floor algae slots (+ mask)
   faces     (N,R,12,Ff)    own 6 reef faces then opponent 6 (occupancy, algae, relative pose)
   landmarks (N,R,15,Fl)    4 stations, 2 processors, 2 net zones, 6 cages, barge support
@@ -18,7 +19,10 @@ import numpy as np
 from ghostsim import geometry as geo
 from ghostsim.robots import ALLIANCE, R
 
-S, FO, FP, FF, FL = 42, 23, 6, 15, 12
+S, FP, FF, FL = 42, 6, 15, 12
+FO_RAW = 23                                       # per-other features before the intent block
+N_GOALS = 13                                      # game.json goals (checked in Encoder)
+FO = FO_RAW + N_GOALS                             # 36
 N_OTH, N_PC, N_FACE, N_LM = 5, 30, 12, 15
 OTHERS = np.array([[q for q in range(R) if q != r and ALLIANCE[q] == ALLIANCE[r]] +
                    [q for q in range(R) if ALLIANCE[q] != ALLIANCE[r]] for r in range(R)])      # (R,5)
@@ -30,8 +34,13 @@ def _ego(v, c, s):
 
 
 class Encoder:
-    def __init__(self, game):
+    def __init__(self, game, intent_weights="default"):
+        """intent_weights: npz path, None (zeros; used while collecting intent data), or 'default'."""
+        from .intent import WEIGHTS, load_weights
         self.g = game
+        self.intent = load_weights(WEIGHTS if intent_weights == "default" else intent_weights) \
+            if intent_weights is not None else None
+        self.last_teammate = None                         # (N,R,2,25) teammate features of the last encode()
         L, W = game.length, game.width
         self.LW = np.array([L, W])
         self.G = self._glob_dim()
@@ -59,6 +68,7 @@ class Encoder:
         gi = {n: i for i, n in enumerate(game.goals)}
         self.gi = gi
         self.n_goals = len(game.goals)
+        assert self.n_goals == N_GOALS, self.n_goals
 
     def _glob_dim(self):
         return R * 21 + 2 * 6 * 8 + 10 + 30 * 3 + 6 + 3 + 2
@@ -135,6 +145,16 @@ class Encoder:
         oth = np.concatenate([rel / 10.0, np.stack([np.cos(dyaw), np.sin(dyaw)], -1), o_vel / 5.0, (om[:, oi] / 10.0)[..., None],
                               ally[..., None], gs.hold_coral[:, oi][..., None], gs.hold_algae[:, oi][..., None], hs[..., None] / 0.5,
                               caps[:, oi], (np.linalg.norm(rel, axis=-1) / 20.0)[..., None]], -1).astype(np.float32)
+        assert oth.shape[-1] == FO_RAW, oth.shape
+        # teammate intent: predicted goal distribution of the 2 allies (features are in this viewer's frame)
+        tm = np.stack([np.broadcast_to(t_left[:, None], (n, R)), np.broadcast_to(endg[:, None], (n, R))], -1)
+        tf = np.concatenate([oth[:, :, :2], np.broadcast_to(tm[:, :, None], (n, R, 2, 2))], -1).astype(np.float32)
+        self.last_teammate = tf
+        intent = np.zeros((n, R, 5, N_GOALS), np.float32)
+        if self.intent is not None:
+            from .intent import predict_np
+            intent[:, :, :2] = predict_np(self.intent, tf)
+        oth = np.concatenate([oth, intent], -1)
         assert oth.shape[-1] == FO, oth.shape
 
         # pieces
