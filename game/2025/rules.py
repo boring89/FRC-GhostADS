@@ -34,6 +34,8 @@ class State:
         self.score, self.fouls = z(n, 2), z(n, 2)
         self.prev_pair, self.prev_cage = b(n, len(PAIRS)), b(n, R, 6)
         self.g421_t = z(n, 2)
+        # not game points: damage tally (own robots hit hard), teammate-contact timer (reward shaping only)
+        self.damage, self.dmg_t, self.press_t = z(n, R), z(n, R), z(n, R)
         self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
 
 
@@ -215,6 +217,7 @@ class Game(GameBase):
         st.cage_deep[idx] = prm.climb[idx] != 1                          # cage k <-> driver station k
         st.score[idx], st.fouls[idx] = 0, 0
         st.prev_pair[idx], st.prev_cage[idx], st.g421_t[idx] = False, False, 0
+        st.damage[idx], st.dmg_t[idx], st.press_t[idx] = 0, 0, 0
         st.pair_last[idx] = -1e9
 
     # ------------------------------------------------------------------ geometry tests
@@ -390,10 +393,27 @@ class Game(GameBase):
 
         # ---- fouls (contact based, assessed on contact onset)
         foul += self._fouls(st, body, prm, t, live, auto, dt)
+        self._damage(st, body, live, dt)
+        self._teammate_press(st, body, live, dt)
 
         for a in range(2):
             st.score[:, a] += pts[:, ALLIANCE == a].sum(1) + bonus[:, a] + foul[:, ALLIANCE != a].sum(1)
         return pts, foul, bonus
+
+    def _damage(self, st, body, live, dt):
+        """Robot hits something (robot, cage, reef, wall) at >= damage_speed_mps. Each hit costs damage_points,
+        at most once per damage_cooldown_s per robot. Kept in st.damage: NOT part of st.score."""
+        m = self.model
+        hit = (body.impact >= m["damage_speed_mps"]) & live[:, None] & (st.dmg_t <= 0)
+        st.dmg_t = np.where(hit, m["damage_cooldown_s"], np.maximum(st.dmg_t - dt, 0.0))
+        st.damage += hit * m["damage_points"]
+
+    def _teammate_press(self, st, body, live, dt):
+        """Seconds each robot has been continuously touching a teammate (any teammate contact resets at 0)."""
+        same = ~(ALLIANCE[PAIRS[:, 0]] != ALLIANCE[PAIRS[:, 1]])
+        touch = body.pair_contact & same
+        on = (touch.astype(float) @ EI.T + touch.astype(float) @ EJ.T) > 0
+        st.press_t = np.where(on & live[:, None], st.press_t + dt, 0.0)
 
     def _fouls(self, st, body, prm, t, live, auto, dt):
         """G427 zone protection, G428 cage protection, G418 opponent cage, G421 one defender.

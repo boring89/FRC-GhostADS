@@ -37,6 +37,8 @@ class Body:
     slip: np.ndarray        # (N,R,4) bool
     pair_contact: np.ndarray    # (N,15) bool
     poly_contact: np.ndarray    # (N,R,P) bool
+    wall_contact: np.ndarray    # (N,R) bool, touching a field half-plane (walls, chamfers)
+    impact: np.ndarray          # (N,R) m/s, largest approach speed of a contact that STARTED this substep (0 if none)
 
 
 @dataclass
@@ -61,39 +63,44 @@ class Physics:
         z = np.zeros
         return Body(pose=z((n, R, 3)), vel=z((n, R, 3)), az=z((n, R, 4)), wheel=z((n, R, 4)),
                     vbatt=np.full((n, R), 12.6), fixed=z((n, R), bool), slip=z((n, R, 4), bool),
-                    pair_contact=z((n, len(PAIRS)), bool), poly_contact=z((n, R, len(self.polys)), bool))
+                    pair_contact=z((n, len(PAIRS)), bool), poly_contact=z((n, R, len(self.polys)), bool),
+                    wall_contact=z((n, R), bool), impact=z((n, R)))
 
     # ------------------------------------------------------------------ contacts (sparse lists)
-    def _contacts(self, pose, half, cs, sn, inv_m, inv_I):
-        """Returns list of contacts: (env, robot_a, robot_b or -1, normal a->b, r_a, r_b, k_eff) and dense flags."""
+    def _contacts(self, pose, half, cs, sn, inv_m, inv_I, prev):
+        """Returns (contacts or None, pact, oact, wact, onset). contacts: (env, robot_a, robot_b or -1, normal a->b,
+        r_a, r_b, k_eff, has_b, imb, iIb); onset: per contact, True if that contact was not touching last substep.
+        prev = (pair_contact, poly_contact, wall_contact) from the previous substep."""
         c = self.cfg
         n = pose.shape[0]
         a, b = PAIRS[:, 0], PAIRS[:, 1]
         pd, pn, pidx = geo.obb_sat(pose[:, a, :2], half[:, a], cs[:, a], sn[:, a],
                                    pose[:, b, :2], half[:, b], cs[:, b], sn[:, b])
         pact = pd > -c.margin
-        E, A, B, NRM, PT = [], [], [], [], []
+        E, A, B, NRM, PT, ONS = [], [], [], [], [], []
         e, q = np.nonzero(pact)
         if len(e):
             ia, ib, nn = a[q], b[q], pn[e, q]
             cA = geo.box_corners(pose[e, ia, :2], half[e, ia], cs[e, ia], sn[e, ia])
             cB = geo.box_corners(pose[e, ib, :2], half[e, ib], cs[e, ib], sn[e, ib])
             pt = np.where((pidx[e, q] < 2)[:, None], geo.support(cB, nn, True), geo.support(cA, nn, False))
-            E.append(e); A.append(ia); B.append(ib); NRM.append(nn); PT.append(pt)
+            E.append(e); A.append(ia); B.append(ib); NRM.append(nn); PT.append(pt); ONS.append(~prev[0][e, q])
         od, on, opt = geo.box_poly_sat(pose[..., :2], half, cs, sn, self.polys)            # robot -> polygon
         oact = od > -c.margin
-        e, r_, _ = np.nonzero(oact)
+        e, r_, pi = np.nonzero(oact)
         if len(e):
             E.append(e); A.append(r_); B.append(np.full(len(e), -1)); NRM.append(on[oact]); PT.append(opt[oact])
+            ONS.append(~prev[1][e, r_, pi])
         hd, _ = geo.halfplane_box(pose[..., :2], half, cs, sn, self.hp_n, self.hp_off, points=False)
-        e, r_, h = np.nonzero(hd > -c.margin)
+        wact = hd > -c.margin
+        e, r_, h = np.nonzero(wact)
         if len(e):
             corners = geo.box_corners(pose[e, r_, :2], half[e, r_], cs[e, r_], sn[e, r_])
             E.append(e); A.append(r_); B.append(np.full(len(e), -1)); NRM.append(-self.hp_n[h])
-            PT.append(geo.support(corners, self.hp_n[h], True))
+            PT.append(geo.support(corners, self.hp_n[h], True)); ONS.append(~prev[2][e, r_])
         if not E:
-            return None, pact, oact
-        E, A, B, NRM, PT = map(np.concatenate, (E, A, B, NRM, PT))
+            return None, pact, oact, wact, np.zeros(0, bool)
+        E, A, B, NRM, PT, ONS = map(np.concatenate, (E, A, B, NRM, PT, ONS))
         ra = PT - pose[E, A, :2]
         Bc = np.maximum(B, 0)
         rb = np.where((B >= 0)[:, None], PT - pose[E, Bc, :2], 0.0)
@@ -101,7 +108,7 @@ class Physics:
         iIb = np.where(B >= 0, inv_I[E, Bc], 0.0)
         kk = inv_m[E, A] + imb + inv_I[E, A] * geo.cross2(ra, NRM) ** 2 + iIb * geo.cross2(rb, NRM) ** 2
         keff = np.where(kk > 0, 1.0 / np.maximum(kk, 1e-12), 0.0)
-        return (E, A, Bc, B >= 0, NRM, ra, rb, keff, imb, iIb), pact, oact
+        return (E, A, Bc, B >= 0, NRM, ra, rb, keff, imb, iIb), pact, oact, wact, ONS
 
     # ------------------------------------------------------------------ step
     def substep(self, s: Body, p, tgt_spd, tgt_az, dt):
@@ -129,10 +136,18 @@ class Physics:
         lim_s, lim_k = p.mu_s[..., None] * Nn * dt, p.mu_k[..., None] * Nn * dt
         J = np.zeros(r.shape)
         slip = np.zeros(r.shape[:-1], bool)
-        con, pact, oact = self._contacts(s.pose, p.half, cs, sn, inv_m, inv_I)
+        con, pact, oact, wact, ons = self._contacts(s.pose, p.half, cs, sn, inv_m, inv_I,
+                                                    (s.pair_contact, s.poly_contact, s.wall_contact))
+        s.impact = np.zeros(s.pose.shape[:2])
         if con is not None:
             E, A, B, hasb, NRM, ra, rb, keff, imb, iIb = con
             lam = np.zeros(len(E))
+            # approach speed at the start of the substep, for contacts that just began (damage model)
+            va0 = vel[E, A, :2] + _cross_w(vel[E, A, 2], ra)
+            vb0 = np.where(hasb[:, None], vel[E, B, :2] + _cross_w(vel[E, B, 2], rb), 0.0)
+            app = np.maximum(0.0, -((vb0 - va0) * NRM).sum(-1)) * ons
+            np.maximum.at(s.impact, (E, A), app)
+            np.maximum.at(s.impact, (E[hasb], B[hasb]), app[hasb])
         quarter = (p.mass / 4)[..., None, None]
         for _ in range(c.iters):
             vc = vel[..., None, :2] + _cross_w(vel[..., None, 2], r)
@@ -176,7 +191,7 @@ class Physics:
         I = (F / p.stall_force[..., None] * p.stall_current[..., None] * duty).sum(-1) + p.other_load
         target = np.maximum(p.v_oc - p.r_int * I, 6.0)
         s.vbatt += (target - s.vbatt) * min(1.0, dt / 0.05)
-        s.pair_contact, s.poly_contact = pact, oact
+        s.pair_contact, s.poly_contact, s.wall_contact = pact, oact, wact.any(-1)
 
     def _position_correction(self, s, p, inv_m):
         c = self.cfg

@@ -17,6 +17,7 @@ R_POINT = 0.1              # reward per match point
 W_ACQUIRE = (0.10, 0.05)   # shaping: coral / algae acquired
 W_POTENTIAL = 1.0          # shaping: potential-based distance to the baseline target (x -dist/20)
 W_WIN = 1.0
+DAMAGE_W = 1.0            # reward per damage point (damage is not game score; it is a training cost)
 
 
 class _Worker:
@@ -32,6 +33,7 @@ class _Worker:
         self.ctrl = np.zeros((self.n, 2), bool)                  # True: alliance is driven by the baseline
         self._fresh()
         self.prev_score = self.sim.score.copy()
+        self.prev_dmg = self.sim.gs.damage.copy()
         self.plan_cache = None
         self.noise = 0.0                                          # exec noise on baseline-driven robots (labels stay clean)
         self.rng = np.random.default_rng(cfg.seed + 7)
@@ -62,6 +64,7 @@ class _Worker:
         self.sim.reset()
         self._fresh()
         self.prev_score = self.sim.score.copy()
+        self.prev_dmg = self.sim.gs.damage.copy()
         self.prev_hold = self.sim.game.holding(self.sim.gs).copy()
         self.plan_cache = self.bl.plan(self.sim)
         self.phi = self._phi(self.plan_cache)
@@ -87,6 +90,11 @@ class _Worker:
         self.tick += 1
         diff = sim.score - self.prev_score
         self.prev_score = sim.score.copy()
+        dmg_inc = sim.gs.damage - self.prev_dmg                                # (n,R) damage points taken this tick
+        self.prev_dmg = sim.gs.damage.copy()
+        g = sim.game.model
+        press_pen = (sim.gs.press_t > g["teammate_press_grace_s"]) * g.get("teammate_press_pen_per_s", 0.0) * 0.1
+        pen = -R_POINT * (DAMAGE_W * dmg_inc + press_pen)                     # per-robot penalties, own robots only
         team = (diff[:, ALLIANCE] - diff[:, 1 - ALLIANCE]) * R_POINT                # (n,R)
         hold = sim.game.holding(gs)
         acq = (hold & ~self.prev_hold).astype(float)
@@ -109,6 +117,7 @@ class _Worker:
             sim.reset(done)
             self._fresh(done)
             self.prev_score[done] = sim.score[done]
+            self.prev_dmg[done] = 0.0
             self.prev_hold[done] = sim.game.holding(sim.gs)[done]
             plan3 = self.bl.plan(sim)
             self.phi[done] = self._phi(plan3)[done]
@@ -117,12 +126,13 @@ class _Worker:
             sim.reset(trunc)
             self._fresh(trunc)
             self.prev_score[trunc] = sim.score[trunc]
+            self.prev_dmg[trunc] = 0.0
             self.prev_hold[trunc] = sim.game.holding(sim.gs)[trunc]
             self.plan_cache = self.bl.plan(sim)
             self.phi[trunc] = self._phi(self.plan_cache)[trunc]
             done = done | trunc
         return {"obs": self._obs(), "act_stick": act_stick.astype(np.float32), "act_goal": act_goal,
-                "r_team": (team + win).astype(np.float32),
+                "r_team": (team + win + pen).astype(np.float32),
                 "r_shape": (shape_acq + shape_pot).astype(np.float32), "done": done.copy(),
                 "final": final, "pts": info.points.astype(np.float32), "fouls": info.fouls.astype(np.float32)}
 

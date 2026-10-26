@@ -134,12 +134,41 @@ class Baseline:
         # endgame: park in the own barge zone
         zone_y = g.mid[1] + np.where(ALLIANCE == 0, 1.0, -1.0) * (0.8 + 1.0 * (np.arange(R) % 3))
         park_xy = np.stack([g.mid[0] + side * (g.bz_half + hx.mean() - 0.12), zone_y], -1)[None].repeat(n, 0)
-        park = (sim.t >= sim.end_t - self.park_s)[:, None] & np.ones((n, R), bool)
+        endg = (sim.t >= sim.end_t - self.park_s)[:, None] & np.ones((n, R), bool)
+        # endgame: hang on a free own cage if this robot's climb capability fits the cage (6 / 12 pts, vs 2 for park)
+        c_g, c_xy, c_yaw, c_ok = self._climb_target(sim, pos, hx)
+        climb = endg & c_ok
+        goal = np.where(climb, c_g, goal)
+        tgt = np.where(climb[..., None], c_xy, tgt)
+        tyaw = np.where(climb, c_yaw, tyaw)
+        park = endg & ~climb
         goal = np.where(park, 0, goal)
         tgt = np.where(park[..., None], park_xy, tgt)
         tyaw = np.where(park, 0.0, tyaw)
         goal = np.where(gs.climbed, 0, goal)
         return goal, tgt, tyaw
+
+    def _climb_target(self, sim, pos, hx):
+        """Free own cage that the robot's climb capability can use (rules: deep needs climb 2, shallow needs climb 1).
+        Approach from the side the robot is on, at hx + 0.1 m from the cage centre (cage_approach_m is 0.25)."""
+        g, gs, p = self.g, sim.gs, sim.prm
+        n = pos.shape[0]
+        env = np.arange(n)[:, None, None]
+        own = np.arange(6).reshape(2, 3)[ALLIANCE]                                  # (R,3) own cage ids
+        cc = g.cage_xy[own][None].repeat(n, 0)                                      # (N,R,3,2)
+        free = gs.cage_occ[env, own[None]] < 0                                      # (N,R,3)
+        deep = gs.cage_deep[env, own[None]]
+        cap = p.climb[..., None]
+        ok = free & np.where(deep, cap == 2, cap == 1)
+        side = np.where(pos[:, :, None, 0] < cc[..., 0], -1.0, 1.0)
+        app = cc + np.stack([side * (hx[..., None] + 0.1), np.zeros_like(side)], -1)
+        dist = np.where(ok, np.linalg.norm(app - pos[:, :, None], axis=-1), np.inf)
+        k = np.argmin(dist, -1)
+        xy = np.take_along_axis(app, k[..., None, None].repeat(2, -1), 2)[:, :, 0]
+        cxy = np.take_along_axis(cc, k[..., None, None].repeat(2, -1), 2)[:, :, 0]
+        yaw = np.arctan2(cxy[..., 1] - xy[..., 1], cxy[..., 0] - xy[..., 0])
+        goal = np.full((n, R), self.gi["climb"])
+        return goal, xy, yaw, ok.any(-1)
 
     def _drive(self, sim, pos, yaw, tgt, tyaw):
         p, g = sim.prm, self.g

@@ -227,6 +227,11 @@
   "cage_approach_m": 0.25,
   "hp_net_success": 0.5,
   "foul_cooldown_s": 3.0,
+  "damage_speed_mps": 2.5,
+  "damage_points": 1,
+  "damage_cooldown_s": 1.0,
+  "teammate_press_grace_s": 1.5,
+  "teammate_press_pen_per_s": 0.2,
   "hp_throw_interval_s": 3.0,
   "piece_radius_m": {
    "coral": 0.09,
