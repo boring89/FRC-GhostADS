@@ -84,3 +84,22 @@ def test_baseline_hangs_deep_capable_robot():
         sim.step(*bl.act(sim, bl.plan(sim)))
     assert sim.gs.climbed[:, 3].sum() > 0
     assert sim.gs.climbed[:, 0].sum() == 0                    # climb 0: never
+
+
+def _push_run(teammate_goal_name):
+    sim = make_sim(seed=0)
+    g = sim.game
+    _clear_others(sim, keep={0, 1})
+    place(sim, 0, [g.mid[0] - 3.0, 6.5], 0.0)
+    place(sim, 1, [g.mid[0] - 3.0 + 1.0, 6.5], 0.0)            # teammate 1 m ahead
+    st, gl = idle(sim)
+    gl[:, 1] = g.goals.index(teammate_goal_name)
+    st[:, 0, 0] = 1.0                                           # robot 0 drives into its teammate
+    for _ in range(30):
+        sim.step(st, gl)
+    return sim.gs.push_events[0, 0]
+
+
+def test_push_scoring_teammate_counts_once():
+    assert _push_run("score_L4") >= 1
+    assert _push_run("idle") == 0

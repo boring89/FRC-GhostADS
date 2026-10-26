@@ -34,6 +34,7 @@ class _Worker:
         self._fresh()
         self.prev_score = self.sim.score.copy()
         self.prev_dmg = self.sim.gs.damage.copy()
+        self.prev_push = self.sim.gs.push_events.copy()
         self.plan_cache = None
         self.noise = 0.0                                          # exec noise on baseline-driven robots (labels stay clean)
         self.rng = np.random.default_rng(cfg.seed + 7)
@@ -65,6 +66,7 @@ class _Worker:
         self._fresh()
         self.prev_score = self.sim.score.copy()
         self.prev_dmg = self.sim.gs.damage.copy()
+        self.prev_push = self.sim.gs.push_events.copy()
         self.prev_hold = self.sim.game.holding(self.sim.gs).copy()
         self.plan_cache = self.bl.plan(self.sim)
         self.phi = self._phi(self.plan_cache)
@@ -94,7 +96,9 @@ class _Worker:
         self.prev_dmg = sim.gs.damage.copy()
         g = sim.game.model
         press_pen = (sim.gs.press_t > g["teammate_press_grace_s"]) * g.get("teammate_press_pen_per_s", 0.0) * 0.1
-        pen = -R_POINT * (DAMAGE_W * dmg_inc + press_pen)                     # per-robot penalties, own robots only
+        push_inc = sim.gs.push_events - self.prev_push
+        self.prev_push = sim.gs.push_events.copy()
+        pen = -R_POINT * (DAMAGE_W * dmg_inc + press_pen + g.get("push_scoring_teammate_pen", 0.0) * push_inc)
         team = (diff[:, ALLIANCE] - diff[:, 1 - ALLIANCE]) * R_POINT                # (n,R)
         hold = sim.game.holding(gs)
         acq = (hold & ~self.prev_hold).astype(float)
@@ -118,6 +122,7 @@ class _Worker:
             self._fresh(done)
             self.prev_score[done] = sim.score[done]
             self.prev_dmg[done] = 0.0
+            self.prev_push[done] = 0.0
             self.prev_hold[done] = sim.game.holding(sim.gs)[done]
             plan3 = self.bl.plan(sim)
             self.phi[done] = self._phi(plan3)[done]
@@ -127,6 +132,7 @@ class _Worker:
             self._fresh(trunc)
             self.prev_score[trunc] = sim.score[trunc]
             self.prev_dmg[trunc] = 0.0
+            self.prev_push[trunc] = 0.0
             self.prev_hold[trunc] = sim.game.holding(sim.gs)[trunc]
             self.plan_cache = self.bl.plan(sim)
             self.phi[trunc] = self._phi(self.plan_cache)[trunc]

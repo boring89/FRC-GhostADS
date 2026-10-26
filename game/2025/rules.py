@@ -36,6 +36,8 @@ class State:
         self.g421_t = z(n, 2)
         # not game points: damage tally (own robots hit hard), teammate-contact timer (reward shaping only)
         self.damage, self.dmg_t, self.press_t = z(n, R), z(n, R), z(n, R)
+        # pushing a teammate that is scoring (reward only): events per robot, and last substep's teammate contacts
+        self.push_events, self.prev_tm = z(n, R), b(n, len(PAIRS))
         self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
 
 
@@ -45,6 +47,8 @@ class Game(GameBase):
         f, m = cfg["field"], cfg["model"]
         self.name, self.goals, self.model = cfg["name"], cfg["goals"], m
         self.gi = {g: k for k, g in enumerate(self.goals)}
+        self.scoring_ids = np.array([self.gi[g] for g in ("score_L1", "score_L2", "score_L3", "score_L4", "net",
+                                                          "processor", "climb")])
         self.auto_s, self.teleop_s = cfg["match"]["auto_s"], cfg["match"]["teleop_s"]
         self.endgame_s, self.start_mode = cfg["match"]["endgame_s"], cfg["match"]["start_mode"]
         self.points = cfg["points"]
@@ -218,6 +222,7 @@ class Game(GameBase):
         st.score[idx], st.fouls[idx] = 0, 0
         st.prev_pair[idx], st.prev_cage[idx], st.g421_t[idx] = False, False, 0
         st.damage[idx], st.dmg_t[idx], st.press_t[idx] = 0, 0, 0
+        st.push_events[idx], st.prev_tm[idx] = 0, False
         st.pair_last[idx] = -1e9
 
     # ------------------------------------------------------------------ geometry tests
@@ -395,6 +400,7 @@ class Game(GameBase):
         foul += self._fouls(st, body, prm, t, live, auto, dt)
         self._damage(st, body, live, dt)
         self._teammate_press(st, body, live, dt)
+        self._push_teammate(st, body, goal, live, dt)
 
         for a in range(2):
             st.score[:, a] += pts[:, ALLIANCE == a].sum(1) + bonus[:, a] + foul[:, ALLIANCE != a].sum(1)
@@ -414,6 +420,23 @@ class Game(GameBase):
         touch = body.pair_contact & same
         on = (touch.astype(float) @ EI.T + touch.astype(float) @ EJ.T) > 0
         st.press_t = np.where(on & live[:, None], st.press_t + dt, 0.0)
+
+    def _push_teammate(self, st, body, goal, live, dt):
+        """Onset of a teammate contact in which the robot itself moves into the teammate (>0.3 m/s toward it) while
+        that teammate's current goal is a scoring goal. Counted as one push event for the pusher."""
+        a_, b_ = PAIRS[:, 0], PAIRS[:, 1]
+        same = ALLIANCE[a_] == ALLIANCE[b_]
+        on = body.pair_contact & same & live[:, None]
+        onset = on & ~st.prev_tm
+        st.prev_tm = on.copy()
+        d = body.pose[:, b_, :2] - body.pose[:, a_, :2]
+        u = d / np.maximum(np.linalg.norm(d, axis=-1, keepdims=True), 1e-9)
+        va = (body.vel[:, a_, :2] * u).sum(-1)                  # speed of a toward b
+        vb = -(body.vel[:, b_, :2] * u).sum(-1)                 # speed of b toward a
+        sc = np.isin(goal, self.scoring_ids)
+        push_a = onset & (va > 0.3) & sc[:, b_]
+        push_b = onset & (vb > 0.3) & sc[:, a_]
+        st.push_events += (push_a.astype(float) @ EI.T + push_b.astype(float) @ EJ.T)
 
     def _fouls(self, st, body, prm, t, live, auto, dt):
         """G427 zone protection, G428 cage protection, G418 opponent cage, G421 one defender.
