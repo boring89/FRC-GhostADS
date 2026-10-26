@@ -552,10 +552,16 @@ func setup_camera(cam: Camera3D, rob: PackedFloat32Array, ei: int, r: int, rig: 
 	var s := sin(yaw)
 	var t: Array = rig["t"]
 	var m: Array = rig["R"]                      # robot <- camera (WPILib camera: x fwd, y left, z up)
-	var pos := [x + c * t[0] - s * t[1], y + s * t[0] + c * t[1], z + t[2]]
-	var f := []                                  # field <- camera = Rz(yaw) * R
-	for i in 3:
-		f.append([c * m[0][i] - s * m[1][i], s * m[0][i] + c * m[1][i], m[2][i]])
+	var pos: Array
+	var f := []                                  # field <- camera
+	if rig.get("world", false):                  # fixed spectator camera: t / R are given in the field frame
+		pos = [t[0], t[1], t[2]]
+		for i in 3:
+			f.append([m[0][i], m[1][i], m[2][i]])
+	else:                                        # robot camera: Rz(yaw) * R
+		pos = [x + c * t[0] - s * t[1], y + s * t[0] + c * t[1], z + t[2]]
+		for i in 3:
+			f.append([c * m[0][i] - s * m[1][i], s * m[0][i] + c * m[1][i], m[2][i]])
 	var fwd := gv(f[0])
 	var left := gv(f[1])
 	var up := gv(f[2])

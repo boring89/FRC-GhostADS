@@ -22,7 +22,8 @@ DEFAULT_BIN = ROOT / "tools" / "godot" / "Godot_v4.7.2-stable_linux.x86_64"
 
 def rig_dict(cam: dict) -> dict:
     return {"t": cam["robot_to_camera"][:3], "R": rot_rpy(*np.radians(cam["robot_to_camera"][3:])).tolist(),
-            "fx": cam["fx"], "fy": cam["fy"], "cx": cam["cx"], "cy": cam["cy"], "capture": cam["capture"]}
+            "fx": cam["fx"], "fy": cam["fy"], "cx": cam["cx"], "cy": cam["cy"], "capture": cam["capture"],
+            "world": bool(cam.get("world", False))}
 
 
 class RenderClient:

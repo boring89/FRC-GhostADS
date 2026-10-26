@@ -235,7 +235,7 @@ class Game(GameBase):
         lx = d[..., 0] * np.cos(th) + d[..., 1] * np.sin(th)
         ly = -d[..., 0] * np.sin(th) + d[..., 1] * np.cos(th)
         hx = prm.half[..., 0][..., None]
-        return (lx >= hx - 0.05) & (lx <= hx + prm.intake_depth[..., None]) & (np.abs(ly) <= prm.intake_half_width[..., None])
+        return (lx >= hx - 0.15) & (lx <= hx + prm.intake_depth[..., None]) & (np.abs(ly) <= prm.intake_half_width[..., None])
 
     def _spawn_algae(self, st, e, xy, vel):
         """Put one algae on the floor in env e (first free slot)."""
