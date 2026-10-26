@@ -1,0 +1,22 @@
+{
+  "name": "others",
+  "base": "ours.json",
+  "_note": "Partner/opponent robots: base profile with per-reset randomisation. Ranges are MODEL choices.",
+  "uniform": {
+    "mass_kg": [50.0, 67.0],
+    "bumper_side_m": [0.80, 0.98],
+    "height_m": [0.6, 1.1],
+    "drive.free_speed_mps": [3.8, 5.4],
+    "drive.mu_static": [0.9, 1.2],
+    "drive.current_limit_A": [50.0, 100.0],
+    "control.max_speed_mps": [3.5, 5.0],
+    "control.max_omega_radps": [5.0, 10.0]
+  },
+  "times_scale": [0.7, 2.0],
+  "capability_p": {
+    "floor_coral": 0.5, "floor_algae": 0.6, "algae_reef": 0.8,
+    "L1": 0.9, "L2": 0.85, "L3": 0.8, "L4": 0.6,
+    "processor": 0.8, "net": 0.4,
+    "climb_deep": 0.4, "climb_shallow": 0.2
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "ours",
+  "verified": false,
+  "_note": "PLACEHOLDERS. Replace with measured values (mass, drivetrain, camera mounts/intrinsics). Drive numbers are wheel-level effective values so they can be calibrated from logs directly.",
+
+  "bumper_outer_m": [0.90, 0.90],
+  "bumper_z_m": [0.065, 0.14],
+  "height_m": 1.0,
+  "mass_kg": 62.0,
+  "module_offsets_m": [[0.29, 0.29], [0.29, -0.29], [-0.29, 0.29], [-0.29, -0.29]],
+
+  "drive": {
+    "free_speed_mps": 5.0,
+    "stall_force_N": 930.0,
+    "stall_current_A": 366.0,
+    "current_limit_A": 80.0,
+    "steer_rate_radps": 25.0,
+    "mu_static": 1.1,
+    "mu_kinetic": 0.9
+  },
+  "battery": {"v_oc": 12.6, "r_int_ohm": 0.02, "other_load_A": 5.0},
+
+  "control": {
+    "_note": "Systemcore motion layer parameters (must match the Java implementation)",
+    "max_speed_mps": 4.6,
+    "max_omega_radps": 9.0,
+    "deadband": 0.05
+  },
+
+  "mechanism": {
+    "station_side": "front",
+    "floor_coral": true,
+    "floor_algae": true,
+    "algae_reef": true,
+    "levels": [1, 2, 3, 4],
+    "processor": true,
+    "net": true,
+    "climb": "deep",
+    "times_s": {"coral_station": 0.6, "coral_floor": 0.4, "algae_floor": 0.4, "algae_reef": 0.8,
+                "score_L1": 0.5, "score_L2": 0.7, "score_L3": 0.9, "score_L4": 1.2,
+                "processor": 0.5, "net": 0.8, "climb": 3.0},
+    "intake_depth_m": 0.15,
+    "intake_half_width_m": 0.30,
+    "held_offset_m": {"coral": [0.25, 0.0, 0.5], "algae": [0.30, 0.0, 0.8]}
+  },
+
+  "sensors": {
+    "gyro_noise_rad": 0.002,
+    "gyro_bias_rw_rad_per_sqrt_s": 0.0005,
+    "gyro_rate_noise_radps": 0.01,
+    "az_noise_rad": 0.005,
+    "wheel_speed_noise_mps": 0.02,
+    "vision": {"rate_hz": 30.0, "latency_s": 0.05, "max_dist_m": 6.0, "max_incidence_deg": 70.0,
+               "min_px": 18.0, "edge_margin_px": 8.0, "sigma_xy_m": 0.02, "sigma_theta_rad": 0.03,
+               "ambiguity_p": 0.02},
+    "kf": {"odom_std_per_m": 0.03, "odom_std_per_s": 0.005, "yaw_std_per_rad": 0.01, "yaw_std_per_s": 0.001,
+           "init_std": [0.1, 0.1, 0.05], "gate_chi2": 11.34}
+  },
+
+  "cameras": [
+    {"name": "front", "robot_to_camera": [0.30, 0.0, 0.25, 0.0, -10.0, 0.0],
+     "capture": [640, 480], "fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0},
+    {"name": "left", "robot_to_camera": [0.0, 0.30, 0.25, 0.0, -10.0, 90.0],
+     "capture": [640, 480], "fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0},
+    {"name": "right", "robot_to_camera": [0.0, -0.30, 0.25, 0.0, -10.0, -90.0],
+     "capture": [640, 480], "fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0},
+    {"name": "back", "robot_to_camera": [-0.30, 0.0, 0.25, 0.0, -10.0, 180.0],
+     "capture": [640, 480], "fx": 500.0, "fy": 500.0, "cx": 320.0, "cy": 240.0}
+  ]
+}
