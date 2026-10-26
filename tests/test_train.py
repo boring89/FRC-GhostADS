@@ -16,7 +16,8 @@ IN = 0.0254
 
 
 def quiet_sim(n=2, seed=0, **kw):
-    return VecSim(SimCfg(n_envs=n, sensors=False, seed=seed, slots=("ours",) * 6, randomize=False, **kw))
+    return VecSim(SimCfg(n_envs=n, sensors=False, seed=seed, slots=("ours",) * 6, randomize=False,
+                         **{"start_mode": "teleop", **kw}))
 
 
 # ------------------------------------------------------------------ baseline

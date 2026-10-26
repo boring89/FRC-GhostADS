@@ -182,7 +182,7 @@
   "auto_s": 15.0,
   "teleop_s": 135.0,
   "endgame_s": 20.0,
-  "start_mode": "teleop"
+  "start_mode": "auto"
  },
  "goals": [
   "idle",

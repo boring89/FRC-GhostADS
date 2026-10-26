@@ -15,7 +15,8 @@ PARK = np.concatenate([_BLUE, [_L, _W] - _BLUE])
 
 def make_sim(n=1, sensors=False, seed=0, full=True, **kw):
     """full=True: every robot can do everything (rules tests). full=False: the actual design spec."""
-    sim = VecSim(SimCfg(n_envs=n, seed=seed, sensors=sensors, slots=("ours",) * 6, **{"randomize": False, **kw}))
+    kw = {"randomize": False, "start_mode": "teleop", **kw}          # scenario tests: teleop unless asked otherwise
+    sim = VecSim(SimCfg(n_envs=n, seed=seed, sensors=sensors, slots=("ours",) * 6, **kw))
     if full:
         p = sim.prm
         p.processor[:], p.algae_reef[:], p.climb[:] = True, True, 2
