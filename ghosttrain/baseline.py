@@ -3,9 +3,9 @@
 Pure state machine, no learning. It is the denominator of the win-rate metric, a league opponent and an
 end-to-end test of the simulator rules. Output is the same as every policy: stick (N,R,3), goal (N,R).
 
-Priority per robot:  endgame -> park in own barge zone;  holding algae (net capable) -> net;
+Priority per robot:  endgame -> climb / park;  holding algae -> processor (if capable) else net;
 holding coral -> highest level that still has a free branch on the nearest own reef face;
-otherwise the cheapest of: coral station (stock left) / floor coral / floor algae.
+otherwise the cheapest of: coral station (stock left) / floor coral / floor algae / reef algae.
 Steering: P-controller to an approach pose with a speed profile, repulsion from other robots and obstacles.
 """
 from __future__ import annotations
@@ -19,8 +19,10 @@ LV = ("score_L1", "score_L2", "score_L3", "score_L4")
 
 
 class Baseline:
-    def __init__(self, game, park_s: float = 14.0, kp: float = 2.2, accel: float = 3.0):
+    def __init__(self, game, park_s: float = 14.0, kp: float = 2.2, accel: float = 3.0,
+                 algae_floor_bias: float = 1.0, algae_reef_bias: float = 1.0):
         self.g, self.park_s, self.kp, self.accel = game, park_s, kp, accel
+        self.algae_floor_bias, self.algae_reef_bias = algae_floor_bias, algae_reef_bias
         self.gi = {n: i for i, n in enumerate(game.goals)}
         obst = [game.polys.center[i] for i in range(len(game.polys))]
         rad = [1.55, 1.55, 0.75] + [0.45] * 6
@@ -79,13 +81,28 @@ class Baseline:
         upd = cost < best
         best = np.where(upd, cost, best); goal = np.where(upd, self.gi["coral_station"], goal)
         xy = np.where(upd[..., None], xy_s, xy); yaw = np.where(upd, np.arctan2(-nk[..., 1], -nk[..., 0]), yaw)
+        # reef algae (robots with algae_reef): stand at the nearest own face that still has algae, as for scoring
+        ra = gs.reef_algae[env, al]                                                  # (N,R,6)
+        fR, nR = g.reef_fc[ALLIANCE], g.reef_n[ALLIANCE]                              # (R,6,2)
+        appR = fR[None] + nR[None] * (hx[..., None, None] + 0.10)                     # (N,R,6,2)
+        dR = np.linalg.norm(appR - pos[:, :, None], axis=-1)
+        dR = np.where(ra & (p.algae_reef & ~gs.hold_algae)[..., None], dR, np.inf)
+        k = np.argmin(dR, -1)
+        dmin = np.take_along_axis(dR, k[..., None], -1)[..., 0]
+        xyR = np.take_along_axis(appR, k[..., None, None].repeat(2, -1), 2)[:, :, 0]
+        nk = nR[None].repeat(n, 0)[np.arange(n)[:, None], np.arange(R)[None], k]
+        cost = np.where(np.isfinite(dmin), dmin * self.algae_reef_bias, np.inf)
+        upd = cost < best
+        best = np.where(upd, cost, best); goal = np.where(upd, self.gi["algae_reef"], goal)
+        xy = np.where(upd[..., None], xyR, xy); yaw = np.where(upd, np.arctan2(-nk[..., 1], -nk[..., 0]), yaw)
         # floor pieces: stand `hx + 0.07` short of the piece, facing it
         under = np.zeros(gs.coral.active.shape, bool)
         ue, uk = np.nonzero(gs.stacked >= 0)
         under[ue, gs.stacked[ue, uk]] = True
         for name, pcs, act, cap, bias, gname in (
                 ("coral", gs.coral.pos, gs.coral.active & ~under, p.floor_coral & ~gs.hold_coral, 1.15, "coral_floor"),
-                ("algae", gs.algae.pos, gs.algae.active, p.floor_algae & p.net & ~gs.hold_algae, 1.6, "algae_floor")):
+                ("algae", gs.algae.pos, gs.algae.active, p.floor_algae & (p.net | p.processor) & ~gs.hold_algae,
+                 self.algae_floor_bias, "algae_floor")):
             d = np.linalg.norm(pcs[:, None] - pos[:, :, None], axis=-1)            # (N,R,K)
             d = np.where(act[:, None], d, np.inf)
             k = np.argmin(d, -1)
@@ -123,14 +140,23 @@ class Baseline:
         # holding coral and a free branch exists -> score
         m = gs.hold_coral & s_ok
         goal, tgt, tyaw = np.where(m, s_g, goal), np.where(m[..., None], s_xy, tgt), np.where(m, s_yaw, tyaw)
-        # holding algae -> net (blue: own side of the barge, y in own net range)
-        net_y = g.net_y[ALLIANCE].mean(-1)
+        # holding algae: processor (6 pts, 0.5 s) if the robot can, else net (4 pts, 1.8 s).
+        # A robot that holds a coral with a free branch scores the coral first (checked above).
+        hold_c = gs.hold_coral & s_ok
+        pc, pn = g.proc_c[ALLIANCE], g.proc_n[ALLIANCE]                              # (R,2)
+        proc_xy = pc[None] + pn[None] * (hx[..., None] + 0.10)                        # (N,R,2)
+        proc_yaw = np.broadcast_to(np.arctan2(-pn[:, 1], -pn[:, 0]), (n, R))
+        m_proc = gs.hold_algae & p.processor & ~hold_c
+        goal = np.where(m_proc, gi["processor"], goal)
+        tgt = np.where(m_proc[..., None], proc_xy, tgt)
+        tyaw = np.where(m_proc, proc_yaw, tyaw)
+        net_y = g.net_y[ALLIANCE].mean(-1)                                           # (R,)
         side = np.where(ALLIANCE == 0, -1.0, 1.0)
         net_xy = np.stack([g.mid[0] + side * np.mean(g.model["net_zone_dx_m"]) * np.ones(R), net_y], -1)[None].repeat(n, 0)
-        m = gs.hold_algae & p.net & ~(gs.hold_coral & s_ok)
-        goal = np.where(m, gi["net"], goal)
-        tgt = np.where(m[..., None], net_xy, tgt)
-        tyaw = np.where(m, np.where(ALLIANCE == 0, 0.0, np.pi), tyaw)
+        m_net = gs.hold_algae & p.net & ~hold_c & ~m_proc
+        goal = np.where(m_net, gi["net"], goal)
+        tgt = np.where(m_net[..., None], net_xy, tgt)
+        tyaw = np.where(m_net, np.where(ALLIANCE == 0, 0.0, np.pi), tyaw)
         # endgame: park in the own barge zone
         zone_y = g.mid[1] + np.where(ALLIANCE == 0, 1.0, -1.0) * (0.8 + 1.0 * (np.arange(R) % 3))
         park_xy = np.stack([g.mid[0] + side * (g.bz_half + hx.mean() - 0.12), zone_y], -1)[None].repeat(n, 0)

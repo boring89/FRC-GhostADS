@@ -182,11 +182,12 @@ def test_baseline_control_inside_worker_overrides_policy_actions():
     w.reset()
     w.set_ctrl(np.array([[False, True], [False, True]]))
     st, gl = np.zeros((2, 6, 3)), np.zeros((2, 6), int)
+    p0 = w.sim.body.pose[..., :2].copy()
     for _ in range(30):
         r = w.step(st, gl)
-    moved_blue = np.linalg.norm(w.sim.body.vel[:, :3, :2], axis=-1).max()
-    moved_red = np.linalg.norm(w.sim.body.vel[:, 3:, :2], axis=-1).max()
-    assert moved_blue < 0.05 < moved_red
+    # displacement over the window (the final velocity alone is ~0 once a robot has arrived at its target)
+    moved = np.linalg.norm(w.sim.body.pose[..., :2] - p0, axis=-1)
+    assert moved[:, :3].max() < 0.05 < moved[:, 3:].max()
 
 
 def test_parallel_env_matches_in_process_shapes():
