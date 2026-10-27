@@ -86,6 +86,8 @@ class VecSim:
         n = c.n_envs
         stick = np.nan_to_num(np.asarray(stick, float))
         goal = np.clip(np.asarray(goal, np.int64), 0, len(g.goals) - 1)
+        from .align import apply as align_apply
+        stick, goal = align_apply(self, stick, goal)        # auto-align: policy's align goal drives the robot
         pts, fouls, bonus = np.zeros((n, R)), np.zeros((n, R)), np.zeros((n, 2))
         for _ in range(c.substeps):
             live = self.t < self.end_t - 1e-9

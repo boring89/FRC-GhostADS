@@ -1,7 +1,7 @@
 """REEFSCAPE rules (game/2025/rules.py) scenario tests."""
 import numpy as np
 
-from conftest import at_face, idle, make_sim, place, run
+from conftest import at_branch, at_face, idle, make_sim, place, run
 from ghostsim import SimCfg, VecSim
 
 
@@ -22,7 +22,7 @@ def test_staging_matches_manual():
 
 
 def test_score_l4_and_points(sim):
-    at_face(sim, 0, 0, 3)
+    at_branch(sim, 0, 0, 3, side=1)
     sim.gs.hold_coral[:, 0] = True
     st, gl = idle(sim)
     gl[:, 0] = gid(sim, "score_L4")
@@ -35,7 +35,7 @@ def test_score_l4_and_points(sim):
 def test_algae_blocks_level(sim):
     g = sim.game
     low_face = int(np.flatnonzero(~g.algae_high)[0])
-    at_face(sim, 0, 0, low_face)
+    at_branch(sim, 0, 0, low_face, side=1)
     sim.gs.hold_coral[:, 0] = True
     st, gl = idle(sim)
     gl[:, 0] = gid(sim, "score_L2")
@@ -50,7 +50,7 @@ def test_algae_blocks_level(sim):
 
 
 def test_l1_capacity_and_both_branches(sim):
-    at_face(sim, 0, 0, 3)
+    at_face(sim, 0, 0, 3)                                                 # trough: whole face, no lateral test
     st, gl = idle(sim)
     gl[:, 0] = gid(sim, "score_L1")
     for _ in range(5):
@@ -58,10 +58,11 @@ def test_l1_capacity_and_both_branches(sim):
         run(sim, st, gl, 8)
     assert sim.gs.l1[0, 0, 3] == sim.game.l1_cap
     gl[:, 0] = gid(sim, "score_L4")
-    for _ in range(3):
+    for side in (-1, 1):                                                   # one L4 branch on each side of the face
+        at_branch(sim, 0, 0, 3, side=side)
         sim.gs.hold_coral[:, 0] = True
         run(sim, st, gl, 15)
-    assert sim.gs.branch[0, 0, 3, :, 2].all() and sim.gs.hold_coral[0, 0]   # both L4 branches full
+    assert sim.gs.branch[0, 0, 3, :, 2].all() and not sim.gs.hold_coral[0, 0]   # both L4 branches full
 
 
 def test_must_face_the_reef(sim):

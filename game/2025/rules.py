@@ -41,6 +41,12 @@ class State:
         self.damage, self.dmg_t, self.press_t = z(n, R), z(n, R), z(n, R)
         # pushing a teammate that is scoring (reward only): events per robot, and last substep's teammate contacts
         self.push_events, self.prev_tm = z(n, R), b(n, len(PAIRS))
+        # auto-align (ghostsim/align.py): target face/side, dwell timer, aligned flag
+        self.align_face, self.align_side = i(n, R) - 1, i(n, R) - 1
+        self.align_t, self.aligned = z(n, R), b(n, R)
+        self.align_tgt = z(n, R, 3)
+        self.align_stuck, self.align_last = z(n, R), z(n, R, 2)
+        self.align_bad = b(n, R, 12)              # candidates given up after being stuck (re-chosen next)
         self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
 
 
@@ -227,6 +233,9 @@ class Game(GameBase):
         st.prev_pair[idx], st.prev_cage[idx], st.g421_t[idx] = False, False, 0
         st.damage[idx], st.dmg_t[idx], st.press_t[idx] = 0, 0, 0
         st.push_events[idx], st.prev_tm[idx] = 0, False
+        st.align_face[idx], st.align_side[idx] = -1, -1
+        st.align_t[idx], st.aligned[idx], st.align_tgt[idx] = 0, False, 0
+        st.align_stuck[idx], st.align_last[idx], st.align_bad[idx] = 0, 0, False
         st.pair_last[idx] = -1e9
 
     # ------------------------------------------------------------------ geometry tests
@@ -321,6 +330,10 @@ class Game(GameBase):
         blocked = ralg[..., None] & np.where(hi[..., None], self.block["high"], self.block["low"])     # (N,R,3)
         free = ~st.branch[env[:, None], al, f0] & ~blocked[..., None, :]                                 # (N,R,2,3)
         l1_ok = st.l1[env[:, None], al, f0] < self.l1_cap
+        # branch lateral tolerance: side index 0 is -t, side index 1 is +t (see branch layout in _build_scene)
+        half_pipe = self.cfg["field"]["reef"]["pipe_spacing"] * IN / 2
+        lat_b = lat[..., None] - np.array([-half_pipe, half_pipe])                       # (N,R,2)
+        okb = np.abs(lat_b) <= m["branch_lateral_tol_m"]
 
         c = np.zeros((n, R), bool)
         sel = lambda g: goal == gi[g]
@@ -330,7 +343,7 @@ class Game(GameBase):
         c |= sel("algae_reef") & prm.algae_reef & at_reef & ralg
         c |= sel("score_L1") & st.hold_coral & prm.levels[..., 0] & at_reef & l1_ok
         for li in range(3):
-            c |= sel(f"score_L{li + 2}") & st.hold_coral & prm.levels[..., li + 1] & at_reef & free[..., li].any(-1)
+            c |= sel(f"score_L{li + 2}") & st.hold_coral & prm.levels[..., li + 1] & at_reef & (free[..., li] & okb).any(-1)
         c |= sel("processor") & st.hold_algae & prm.processor & (prc >= 0)
         c |= sel("net") & st.hold_algae & prm.net & net_ok
         c |= sel("climb") & ~auto[:, None] & (prm.climb > 0) & cage_ok.any(-1)
@@ -373,7 +386,7 @@ class Game(GameBase):
                     hi_ = st.reef_algae[e, a, f] and self.block["high" if self.algae_high[f] else "low"][li]
                     order = (1, 0) if lat[e, r] > 0 else (0, 1)
                     for s in order:
-                        if not st.branch[e, a, f, s, li] and not hi_:
+                        if not st.branch[e, a, f, s, li] and not hi_ and okb[e, r, s]:
                             st.branch[e, a, f, s, li] = True; st.branch_auto[e, a, f, s, li] = ph == 0
                             st.hold_coral[e, r] = False; pts[e, r] += P["coral"][g[-2:]][ph]
                             st.cat[e, a, 1] += P["coral"][g[-2:]][ph]

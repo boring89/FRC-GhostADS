@@ -39,7 +39,7 @@ def test_baseline_beats_idle_and_random():
     for _ in range(1350):
         st, gl = bl.act(sim)
         st[:, 3:] = rng.uniform(-1, 1, (4, 3, 3))                 # red plays randomly
-        gl[:, 3:] = rng.integers(0, 13, (4, 3))
+        gl[:, 3:] = rng.integers(0, 14, (4, 3))
         sim.step(st, gl)
     assert (sim.score[:, 0] > sim.score[:, 1]).all()
 
@@ -91,7 +91,7 @@ def test_net_masks_goals_and_is_permutation_invariant():
     t["glob"] = torch.from_numpy(o["glob"])[:, ALLIANCE].reshape(12, -1)
     net = TeacherNet(enc.n_goals, enc.G).eval()
     logits, mu, v = net(t)
-    assert logits.shape == (12, 13) and mu.shape == (12, 3) and v.shape == (12,)
+    assert logits.shape == (12, 14) and mu.shape == (12, 3) and v.shape == (12,)
     assert (logits[~t["gmask"]] < -1e8).all() and (logits[t["gmask"]] > -1e8).all()
     perm = torch.randperm(30)
     t2 = dict(t, pieces=t["pieces"][:, perm], pmask=t["pmask"][:, perm])
@@ -163,7 +163,8 @@ def test_worker_rewards_decisions_and_autoreset():
     g = w.sim.game
     n = g.reef_n[0, 3]
     hx = w.sim.prm.half[0, 0, 0]
-    w.sim.body.pose[0, 0] = [*(g.reef_fc[0, 3] + n * (hx + 0.1)), np.arctan2(-n[1], -n[0])]
+    half_pipe = g.cfg["field"]["reef"]["pipe_spacing"] * 0.0254 / 2
+    w.sim.body.pose[0, 0] = [*(g.reef_fc[0, 3] + n * (hx + 0.1) + g.reef_t[0, 3] * half_pipe), np.arctan2(-n[1], -n[0])]
     w.sim.body.vel[:] = 0
     w.sim.gs.hold_coral[0, 0] = True
     for _ in range(3 * DECIDE_EVERY):                              # next decision tick + 1.7 s elevator

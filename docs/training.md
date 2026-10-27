@@ -76,9 +76,27 @@ the robot page open (robot page 14.9 fps). Pitfalls found: a sim thread in the s
 through the GIL (~29 fps cap); separate Godot clients need separate ports (default port depends on pid); policy
 inference on GPU is slow while Godot renders on the same GPU.
 
+## Auto-align (ghostsim/align.py) and KF fix (ghostsim/sensors.py)
+- Policy trigger: goal `align_score` (index 13). Target: nearest free L2-L4 branch of the 12 (face x side) candidates,
+  skipping branches with another robot within 1.0 m. Two-phase approach (waypoint 0.5 m out, then straight in).
+  Dwell 0.7 s (ours.json times `align_score`) inside 5 cm / 5 deg. Stuck for 2 s -> that candidate is given up.
+- Scoring rule: L2-L4 need the robot centred within 5 cm of the branch (model.branch_lateral_tol_m). L1 (trough) is
+  unchanged (whole face). The old 0.4 m tolerance remains for the face itself.
+- Observation: `self` gained aligned flag, dwell progress, has-target and target offset (S = 48). Without the
+  aligned flag the cloned policy chose `align_score` forever (win 0.000); with it the policy fires scores.
+- KF: wheel slip (robot pushing into walls/cages/robots) made the odometry report motion while stationary. Detected
+  slip now sets translation speed to 0 and adds variance. Median error 1.7 m -> 0.09 m (with vision); without
+  vision the reported sigma now covers the error (test_kf).
+- Baseline: approaches with align (except L1) and fires the best free level on the aligned branch.
+  Measured (16 matches, auto start): score ~105/100 (before align: ~121/130 after keep-out), 51 % of coral-holding
+  ticks aligned. Align approaches are slower than the old direct approach: this is a cost, not yet tuned.
+- BC (runs/bc5, 120 rounds, 14 goals, S=48): goal accuracy 0.980. Evaluation (96 episodes): win 0.042, score 52 vs 100.
+  MAPPO from this BC is NOT run yet (needs a go-ahead). Intent predictor retrained (acc 0.82, scoring recall 0.71).
+
 ## Known issues / next steps
-- Sensor KF: estimate error grows to several metres over 20 s while its covariance stays ~0.1 m (overconfident filter).
-  Visible on the robot page (`est err`). Needs a fix before any estimate-based control (e.g. auto-align) uses it.
+- Align efficiency: approach is slow with teammates around (2-15 s); baseline score fell ~15 %. Tune before long training.
+- Align uses the KF estimate when sensors are on: its 5 cm tolerance is close to the estimate error; training runs
+  with sensors off (true pose).
 - Goal entropy rises during PPO (0.07 -> 1.5). `ent_goal` 0.01 is probably too high; use 0.003 and compare.
 - The baseline's own fouls and stuck behaviour limit the BC start; league self-play should move past it.
 - Shaping targets come from the baseline's plan (potential-based, so it does not change the optimal policy in theory).

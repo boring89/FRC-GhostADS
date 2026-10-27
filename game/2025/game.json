@@ -197,7 +197,8 @@
   "processor",
   "net",
   "climb",
-  "defend"
+  "defend",
+  "align_score"
  ],
  "model": {
   "_note": "MODELLING ASSUMPTIONS (not in the manual). SI units. Confirmed with team lead 2026-10-26.",
@@ -247,6 +248,10 @@
    "algae": 0.5
   },
   "contact_margin_m": 0.01,
-  "cages_rigid": true
+  "cages_rigid": true,
+  "branch_lateral_tol_m": 0.05,
+  "align_tol_m": 0.05,
+  "align_tol_deg": 5.0,
+  "align_gap_m": 0.1
  }
 }

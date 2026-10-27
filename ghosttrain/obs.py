@@ -19,9 +19,9 @@ import numpy as np
 from ghostsim import geometry as geo
 from ghostsim.robots import ALLIANCE, R
 
-S, FP, FF, FL = 42, 6, 15, 12
+S, FP, FF, FL = 48, 6, 15, 12                                # S: self features incl. 14-goal one-hot + 4 align
 FO_RAW = 23                                       # per-other features before the intent block
-N_GOALS = 13                                      # game.json goals (checked in Encoder)
+N_GOALS = 14                                      # game.json goals (checked in Encoder): 13 + align_score
 FO = FO_RAW + N_GOALS                             # 36
 N_OTH, N_PC, N_FACE, N_LM = 5, 30, 12, 15
 OTHERS = np.array([[q for q in range(R) if q != r and ALLIANCE[q] == ALLIANCE[r]] +
@@ -92,6 +92,7 @@ class Encoder:
         m[..., gi["processor"]] = prm.processor
         m[..., gi["net"]] = prm.net
         m[..., gi["climb"]] = prm.climb > 0
+        m[..., gi["align_score"]] = prm.levels[..., 1:].any(-1)     # L2-L4 branches: auto-align needs one of them
         return m
 
     def caps(self, prm):
@@ -129,7 +130,8 @@ class Encoder:
             gs.hold_coral[..., None], gs.hold_algae[..., None], caps, (prm.max_v / 5.0)[..., None], goal_oh,
             tprog[..., None], np.broadcast_to(t_left[:, None, None], (n, R, 1)), np.broadcast_to(is_auto[:, None, None], (n, R, 1)),
             np.broadcast_to(endg[:, None, None], (n, R, 1)), own_sc[..., None] / 100.0, opp_sc[..., None] / 100.0,
-            own_stock[..., None] / 60.0, hp_own[..., None] / 18.0], -1).astype(np.float32)
+            own_stock[..., None] / 60.0, hp_own[..., None] / 18.0,
+            *self._align_feats(sim, pos_w, yaw_w)], -1).astype(np.float32)
         assert selfv.shape[-1] == S, selfv.shape
 
         # others
@@ -212,6 +214,19 @@ class Encoder:
         assert lm.shape[-1] == FL, lm.shape
         return {"self": selfv, "others": oth, "pieces": pieces, "pmask": pmask, "faces": faces, "lm": lm,
                 "glob": self._glob(sim, caps), "gmask": self.goal_mask(prm)}
+
+    def _align_feats(self, sim, pos_w, yaw_w):
+        """Auto-align state the policy needs to know it is aligned: [aligned, dwell progress, has target,
+        target offset in the robot frame / 5 m]. Zeros when the robot has no target."""
+        from ghostsim.robots import R as _R
+        gs, g = sim.gs, self.g
+        need = np.maximum(sim.prm.times[..., g.gi["align_score"]], 1e-6)
+        has = (gs.align_face >= 0).astype(np.float32)
+        tgt = gs.align_tgt[..., :2]
+        rel = _ego(tgt - pos_w, np.cos(yaw_w), np.sin(yaw_w)) * has[..., None]
+        flip_sign = 1.0 - 2.0 * (ALLIANCE == 1).astype(np.float32)                 # canonical (blue) frame
+        return [gs.aligned.astype(np.float32)[..., None], np.minimum(gs.align_t / need, 1.0)[..., None].astype(np.float32),
+                has[..., None], (rel * flip_sign[None, :, None] / 5.0).astype(np.float32)]
 
     def _glob(self, sim, caps):
         g, gs, b, prm = self.g, sim.gs, sim.body, sim.prm

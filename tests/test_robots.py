@@ -1,6 +1,6 @@
 import numpy as np
 
-from conftest import at_face, idle, make_sim, run
+from conftest import at_branch, idle, make_sim, run
 from ghostsim import SimCfg, VecSim
 from ghostsim.robots import load_profile, sample_params
 
@@ -43,7 +43,7 @@ def test_randomised_episodes_differ_per_reset():
 def test_elevator_robot_cannot_climb_but_uses_processor():
     sim = make_sim(full=False)
     g = sim.game
-    at_face(sim, 0, 0, 3)
+    at_branch(sim, 0, 0, 3, side=1)
     sim.gs.hold_coral[:, 0] = True
     st, gl = idle(sim)
     gl[:, 0] = g.goals.index("score_L4")

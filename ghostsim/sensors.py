@@ -110,6 +110,13 @@ class Sensors:
         self.wheel = body.wheel + rng.normal(0, sp["wheel_speed_noise_mps"], self.wheel.shape)
         mv = np.stack([self.wheel * np.cos(self.az), self.wheel * np.sin(self.az)], -1).reshape(n, R, 8)
         self.odom_vel = (self.pinv @ mv[..., None])[..., 0]                               # robot-frame chassis speeds
+        # slip detection: wheels turn while the robot does not move (pushing into a wall, cage or robot), so the
+        # wheel readings say "moving" while the ground speed is ~0. Detected slip -> translation speed 0 and extra
+        # translational variance. The detector is imperfect (sp slip_detect_p).
+        slip = body.slip.any(-1) & live[:, None]
+        det = slip & (rng.random(slip.shape) < sp.get("slip_detect_p", 0.9))
+        self.slip_flag = det
+        self.odom_vel[det] = 0.0
         # odometry predict
         dth = geo.wrap(self.yaw - self.prev_yaw)
         self.prev_yaw = self.yaw
@@ -121,6 +128,7 @@ class Sensors:
         kf = self.kf
         dist = np.linalg.norm(loc, axis=-1)
         self.var[..., :2] += (kf["odom_std_per_m"] ** 2 * dist + kf["odom_std_per_s"] ** 2 * dt)[..., None]
+        self.var[..., :2] += (sp.get("slip_vel_std_mps", 1.0) ** 2 * dt * det)[..., None]
         self.var[..., 2] += kf["yaw_std_per_rad"] ** 2 * np.abs(dth) + kf["yaw_std_per_s"] ** 2 * dt
         self.hist_true = np.roll(self.hist_true, 1, 2); self.hist_true[:, :, 0] = body.pose
         self.hist_est = np.roll(self.hist_est, 1, 2); self.hist_est[:, :, 0] = self.est

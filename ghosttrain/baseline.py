@@ -145,6 +145,15 @@ class Baseline:
         # holding coral and a free branch exists -> score
         m = gs.hold_coral & s_ok
         goal, tgt, tyaw = np.where(m, s_g, goal), np.where(m[..., None], s_xy, tgt), np.where(m, s_yaw, tyaw)
+        # auto-align: approach with the align goal (the controller in ghostsim.align drives the stick), then fire the
+        # best level free on the aligned branch once it is aligned
+        from ghostsim.align import aligned_goal
+        ag = aligned_goal(sim)
+        use = m & gs.aligned & (ag >= 0)
+        goal = np.where(use, ag, goal)
+        # trough (L1) has no branch lateral tolerance: it scores directly, no alignment needed
+        need_align = m & ~use & (s_g != gi["score_L1"])
+        goal = np.where(need_align, g.gi["align_score"], goal)
         # holding algae: processor (6 pts, 0.5 s) if the robot can, else net (4 pts, 1.8 s).
         # A robot that holds a coral with a free branch scores the coral first (checked above).
         hold_c = gs.hold_coral & s_ok

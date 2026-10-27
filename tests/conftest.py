@@ -53,6 +53,16 @@ def at_face(sim, r, a, f, gap=0.1):
     place(sim, r, g.reef_fc[a, f] + n * (hx + gap), np.arctan2(-n[1], -n[0]))
 
 
+def at_branch(sim, r, a, f, side=1, gap=0.1):
+    """Robot in front of face f, centred on one of its two branches (side -1 or +1). L2-L4 scoring needs this."""
+    g = sim.game
+    hx = sim.prm.half[0, r, 0]
+    n, t = g.reef_n[a, f], g.reef_t[a, f]
+    half_pipe = g.cfg["field"]["reef"]["pipe_spacing"] * 0.0254 / 2
+    xy = g.reef_fc[a, f] + n * (hx + gap) + t * side * half_pipe
+    place(sim, r, xy, np.arctan2(-n[1], -n[0]))
+
+
 def idle(sim):
     return np.zeros((sim.cfg.n_envs, R, 3)), np.zeros((sim.cfg.n_envs, R), int)
 

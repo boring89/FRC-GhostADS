@@ -57,7 +57,8 @@
    "score_L4": 1.7,
    "processor": 0.5,
    "net": 1.8,
-   "climb": 3.0
+   "climb": 3.0,
+   "align_score": 0.7
   },
   "intake_depth_m": 0.15,
   "intake_half_width_m": 0.28,
@@ -143,7 +144,9 @@
     0.05
    ],
    "gate_chi2": 11.34
-  }
+  },
+  "slip_detect_p": 0.9,
+  "slip_vel_std_mps": 1.0
  },
  "cameras": [
   {

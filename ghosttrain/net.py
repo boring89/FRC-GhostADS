@@ -38,7 +38,7 @@ class Block(nn.Module):
 
 
 class TeacherNet(nn.Module):
-    def __init__(self, n_goals=13, glob_dim=333, d=64, heads=4, layers=2):
+    def __init__(self, n_goals=14, glob_dim=333, d=64, heads=4, layers=2):      # 14 goals (align_score added)
         super().__init__()
         self.n_goals = n_goals
         self.e_self = mlp(S, 2 * d, d)
