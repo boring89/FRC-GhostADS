@@ -34,10 +34,14 @@ def table(travel_m: float, speed: float, teleop_only: bool = True):
         rows.append((f"coral -> {lv}", pts, cyc, "reef branch / trough; uses a station cycle"))
     pts = tp(g["points"]["net"])
     cyc = t["algae_floor"] + move + t["net"] + move
-    rows.append(("algae floor -> net", pts, cyc, "net; no processor, no reef-algae removal on our robot"))
+    rows.append(("algae floor -> net", pts, cyc, "floor algae (few on our side at start)"))
+    if ours["mechanism"].get("algae_reef"):
+        cyc = t["algae_reef"] + move + t["net"] + move
+        rows.append(("algae reef -> net", pts, cyc, "reef removal, then net"))
     if ours["mechanism"].get("processor"):
         pts = tp(g["points"]["processor"])
-        rows.append(("algae -> processor", pts, t["algae_floor"] + move + t["processor"] + move, ""))
+        rows.append(("algae reef -> processor", pts, t["algae_reef"] + move + t["processor"] + move, "processor, 6 pts"))
+        rows.append(("algae floor -> processor", pts, t["algae_floor"] + move + t["processor"] + move, ""))
     rows.sort(key=lambda r: -r[1] / r[2])
     return rows, g, ours
 
