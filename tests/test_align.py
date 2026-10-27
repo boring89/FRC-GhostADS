@@ -7,6 +7,7 @@ from ghostsim.robots import R
 
 def _sim(seed=5):
     sim = VecSim(SimCfg(n_envs=1, sensors=False, seed=seed, randomize=False, start_mode="teleop", slots=("ours",) * 6))
+    sim.game.model["auto_align"] = True              # auto-align is off by default (game.json); these tests enable it
     sim.prm.levels[:] = True
     sim.gs.hold_coral[:] = True
     return sim

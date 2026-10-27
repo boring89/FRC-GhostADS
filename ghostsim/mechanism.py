@@ -16,18 +16,27 @@ from dataclasses import dataclass, field
 import numpy as np
 
 IN = 0.0254
-FRAME = 26.0 * IN                 # frame outer size without bumpers (robots/ours.json frame_in)
+FRAME = 29.5 * IN                 # frame outer size without bumpers (robots/ours.json frame_in, 254 binder)
 BUMPER_T = 3.25 * IN              # bumper thickness (ours.json bumper_t_in)
-H_MAX = 1.42                      # elevator travel (carriage), metres; wrist tip at 1.83 m = L4 branch top (72 in)
+H_MAX = 1.32                      # elevator travel: 52 in (254 binder p.16)
 EE_LEN = 0.30                     # end-effector arm length from wrist to tip
 INTAKE_LEN = 0.40                 # intake arm length (pivot to roller centre)
 ROLLER_R = 0.05                   # intake roller bar half height
 ALGAE_R = 0.206                   # from game.json piece radius (algae)
 PERIMETER_HALF = FRAME / 2
-WRIST_MIN_DEG = -20.0            # lowest wrist angle that keeps a held algae (r=0.206) above the floor at h=0
 
 PIVOT_EE_X = 0.30                 # wrist pivot x at h=0 (in front of the carriage)
-PIVOT_EE_Z0 = 0.41                # wrist pivot z at h=0
+PIVOT_EE_Z0 = 0.51                # wrist pivot z at h=0 (tip reaches L4 top 1.83 m at H_MAX)
+
+def wrist_min_deg():
+    """Lowest wrist angle (h=0) that keeps a held algae centre (radius ALGAE_R) on or above the floor.
+    Algae centre = wrist tip + (0.10 + 0.9*ALGAE_R) along the arm; tip z = PIVOT_EE_Z0 + EE_LEN*sin(theta)."""
+    k = EE_LEN + 0.10 + ALGAE_R * 0.9
+    s = (ALGAE_R - PIVOT_EE_Z0) / k
+    return float(np.degrees(np.arcsin(np.clip(s, -1.0, 1.0))))
+
+
+WRIST_MIN_DEG = wrist_min_deg()     # about -31 deg with the 254 geometry
 INTAKE_PIVOT = np.array([-0.30, 0.0, 0.13])     # keeps the roller inside R105 (1 ft 6 in) behind the frame
 
 COL = {
@@ -84,7 +93,7 @@ def _box(name, color, center, size, R=None):
 
 def ee_wrist(h):
     """Wrist pivot position for elevator travel h."""
-    z_c = 0.25 + h
+    z_c = 0.35 + h
     return np.array([PIVOT_EE_X, 0.0, z_c + 0.16]), z_c
 
 

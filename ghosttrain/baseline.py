@@ -152,7 +152,7 @@ class Baseline:
         use = m & gs.aligned & (ag >= 0)
         goal = np.where(use, ag, goal)
         # trough (L1) has no branch lateral tolerance: it scores directly, no alignment needed
-        need_align = m & ~use & (s_g != gi["score_L1"])
+        need_align = m & ~use & (s_g != gi["score_L1"]) & bool(g.model.get("auto_align", False))
         goal = np.where(need_align, g.gi["align_score"], goal)
         # holding algae: processor (6 pts, 0.5 s) if the robot can, else net (4 pts, 1.8 s).
         # A robot that holds a coral with a free branch scores the coral first (checked above).

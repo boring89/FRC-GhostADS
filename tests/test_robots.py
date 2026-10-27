@@ -13,10 +13,10 @@ def test_ours_matches_design_spec():
     rng = np.random.default_rng(0)
     p = sample_params([load_profile("ours.json")] * 6, 400, GOALS, rng)
     frame = (p.half[..., 0] * 2 - 2 * 3.25 * IN) / IN               # frame side in inches
-    assert 25.0 <= frame.min() and frame.max() <= 27.0 and frame.std() > 0.3
+    assert 29.0 <= frame.min() and frame.max() <= 30.0 and frame.std() > 0.1     # 254 binder: 29.5 in frame
     assert (p.half[..., 0] == p.half[..., 1]).all()                  # square
     assert p.levels.all() and p.net.all() and p.floor_coral.all() and p.floor_algae.all() and p.station.all()
-    assert p.processor.all() and p.algae_reef.all() and (p.climb == 0).all()     # spec update: processor + reef algae
+    assert p.processor.all() and p.algae_reef.all() and (p.climb == 2).all()     # 254: deep cage climb (binder p.17)
     assert (p.processor == p.processor[0, 0]).all() and (p.algae_reef == p.algae_reef[0, 0]).all()   # fixed, not randomised
     assert (p.max_v <= 0.95 * p.free_speed + 1e-9).all()
     assert 50 <= p.mass.min() and p.mass.max() <= 66
@@ -25,7 +25,7 @@ def test_ours_matches_design_spec():
 
 def test_nominal_values_without_randomisation():
     p = sample_params([load_profile("ours.json")] * 6, 3, GOALS, np.random.default_rng(0), randomize=False)
-    assert np.allclose((p.half[..., 0] * 2 - 2 * 3.25 * IN) / IN, 26.0) and np.allclose(p.mass, 58.0)
+    assert np.allclose((p.half[..., 0] * 2 - 2 * 3.25 * IN) / IN, 29.5) and np.allclose(p.mass, 58.0)
 
 
 def test_others_vary_capabilities():
@@ -56,4 +56,4 @@ def test_elevator_robot_cannot_climb_but_uses_processor():
     run(sim, st, gl, 20)
     assert not sim.gs.hold_algae[0, 0]                                # processor scored (algae released)
     assert sim.gs.processor[0, 0] == 1
-    assert sim.prm.climb[0, 0] == 0 and not sim.gs.climbed[0, 0]      # still no climb
+    assert sim.prm.climb[0, 0] == 2 and not sim.gs.climbed[0, 0]      # deep climb capable (254), not climbing here

@@ -2,8 +2,8 @@
 import numpy as np
 import pytest
 
-from ghostsim.mechanism import (ALGAE_R, EE_LEN, FRAME, H_MAX, INTAKE_LEN, PERIMETER_HALF, WRIST_MIN_DEG, Box, Sphere,
-                                ee_wrist, intake_tip, pose)
+from ghostsim.mechanism import (ALGAE_R, EE_LEN, FRAME, H_MAX, INTAKE_LEN, PERIMETER_HALF, PIVOT_EE_Z0,
+                                WRIST_MIN_DEG, Box, Sphere, ee_wrist, intake_tip, pose)
 
 BRANCH_TOP = {"trough": 18.0 * 0.0254, "L2": 31.875 * 0.0254, "L3": 47.625 * 0.0254, "L4": 72.0 * 0.0254}
 
@@ -53,22 +53,29 @@ def test_starting_configuration_height_r104():
 
 def test_frame_inside_25_27_in():
     frame = [s for s in pose() if isinstance(s, Box) and s.name == "chassis"][0]
-    assert 25 * 0.0254 <= 2 * frame.half[0] <= 27 * 0.0254 + 1e-9
+    assert 29 * 0.0254 <= 2 * frame.half[0] <= 30 * 0.0254 + 1e-9
 
 
 @pytest.mark.parametrize("level", ["trough", "L2", "L3", "L4"])
 def test_end_effector_reaches_every_scoring_height(level):
-    # some elevator height places the wrist tip exactly at the branch top with theta = 0 (horizontal)
+    # L2-L4: an elevator height puts the wrist tip exactly at the branch top with theta = 0 (horizontal).
+    # The trough (18 in) is below the wrist pivot at h=0, so it uses a slightly downward wrist angle instead.
     target = BRANCH_TOP[level]
-    h = target - 0.41                                    # wrist tip height at theta=0 is 0.41 + h
+    if level == "trough":
+        h = 0.0
+        theta = np.degrees(np.arcsin((target - PIVOT_EE_Z0) / EE_LEN))
+        assert WRIST_MIN_DEG <= theta < 0
+        assert abs(tip(h, theta)[2] - target) < 1e-9
+        return
+    h = target - PIVOT_EE_Z0                             # wrist tip height at theta=0 is PIVOT_EE_Z0 + h
     assert 0.0 <= h <= H_MAX
     assert abs(tip(h, 0.0)[2] - target) < 1e-9
 
 
 def test_processor_pose_holds_algae_above_floor():
     # processor opening sits at 7 in (0.18 m): at the processor pose the held algae centre is about 0.21 m up
-    s = [x for x in pose(h=0.0, theta=-20.0, hold="algae") if isinstance(x, Sphere)][0]
-    assert s.center[2] >= ALGAE_R and s.center[2] < 0.25
+    s = [x for x in pose(h=0.0, theta=WRIST_MIN_DEG, hold="algae") if isinstance(x, Sphere)][0]
+    assert s.center[2] >= ALGAE_R - 1e-9 and s.center[2] < 0.25
 
 
 def test_held_algae_is_a_sphere_on_the_end_effector():

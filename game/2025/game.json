@@ -252,6 +252,7 @@
   "branch_lateral_tol_m": 0.05,
   "align_tol_m": 0.05,
   "align_tol_deg": 5.0,
-  "align_gap_m": 0.1
+  "align_gap_m": 0.1,
+  "auto_align": false
  }
 }

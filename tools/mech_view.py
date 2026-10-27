@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ghostsim.mechanism import COL, all_faces, pose
+from ghostsim.mechanism import COL, WRIST_MIN_DEG, all_faces, pose
 
 LIGHT = np.array([-0.45, 0.6, 1.0])
 LIGHT = LIGHT / np.linalg.norm(LIGHT)
@@ -20,7 +20,7 @@ POSES = {
     "ground_coral": dict(h=0.0, theta=-10.0, psi=-10.0, hold=None),
     "L4_coral": dict(h=1.40, theta=0.0, psi=75.0, hold="coral"),
     "L2_coral": dict(h=0.40, theta=-5.0, psi=75.0, hold="coral"),
-    "processor_algae": dict(h=0.0, theta=-20.0, psi=75.0, hold="algae"),
+    "processor_algae": dict(h=0.0, theta=round(WRIST_MIN_DEG, 1), psi=75.0, hold="algae"),
     "net_algae": dict(h=1.40, theta=20.0, psi=75.0, hold="algae"),
 }
 

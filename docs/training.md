@@ -95,6 +95,21 @@ inference on GPU is slow while Godot renders on the same GPU.
   MAPPO from it is the next step (not started).
   MAPPO from this BC is NOT run yet (needs a go-ahead). Intent predictor retrained (acc 0.82, scoring recall 0.71).
 
+## Changes after teacher4 was stopped
+- Broadcast match clock: the child process advanced the match by `sim.t + elapsed`, re-counting each tick's
+  overshoot (about 3x real time). Now it advances by wall time only (measured 20.0 s match per 20.0 s wall).
+  Broadcast 29.9 fps, unchanged.
+- Auto-align is off by default (`game.json` model.auto_align = false): policy cannot pick `align_score`, baseline
+  does not align, branch tolerance is the original 0.4 m. Tests that exercise align set the flag on.
+  Measured sim throughput with align on/off differs by under 5 % (the slowdown in teacher4 came from 6 sim processes
+  instead of 12 plus the align logic, not from align alone).
+- Robot unified with FRC 254 (2025 binder): 29.5 in frame, 4.02 m/s free speed, 52 in elevator (1.32 m), deep cage
+  climb (`climb: deep`), times for coral/algae/score updated (placeholders where the binder is silent).
+  Mass, friction and the exact placement times are still placeholders (`verified: false`).
+  The mechanism model follows the new frame and elevator. The climber is not drawn yet.
+- teacher4 checkpoints (runs/teacher4/iter_0000{10,20,30}.pt) were trained on the old 26 in robot: not compatible
+  with the 254 robot physics; BC and MAPPO must be redone.
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.

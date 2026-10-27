@@ -90,14 +90,19 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
         conn.send({"kind": "match", "appearance": appearance})
         goal = np.zeros((1, R), int)
         res = {"done": np.array([False])}
+        # match clock target: advances by the wall time that passed while watching (never by sim.t itself;
+        # that re-counted each tick's overshoot and ran the match ~3x faster than real time)
         t_wall = time.time()
+        sim_target = float(sim.t[0])
         while not stop.is_set() and sim.t[0] < sim.end_t - 1e-6:
             if not watching.is_set():
                 t_wall = time.time()
+                sim_target = float(sim.t[0])
                 time.sleep(0.2)
                 continue
             now = time.time()
-            target = min(sim.t[0] + min(now - t_wall, 1.0), sim.end_t)
+            sim_target = min(sim_target + min(now - t_wall, 1.0), sim.end_t)
+            target = sim_target
             t_wall = now
             while sim.t[0] + 1e-9 < target and not stop.is_set():
                 t = {key: torch.from_numpy(np.ascontiguousarray(o[key])).reshape(R, *o[key].shape[2:]) for key in keys}

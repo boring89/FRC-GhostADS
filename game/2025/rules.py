@@ -333,7 +333,8 @@ class Game(GameBase):
         # branch lateral tolerance: side index 0 is -t, side index 1 is +t (see branch layout in _build_scene)
         half_pipe = self.cfg["field"]["reef"]["pipe_spacing"] * IN / 2
         lat_b = lat[..., None] - np.array([-half_pipe, half_pipe])                       # (N,R,2)
-        okb = np.abs(lat_b) <= m["branch_lateral_tol_m"]
+        tol_b = m["branch_lateral_tol_m"] if m.get("auto_align", False) else m["lateral_tol_m"]
+        okb = np.abs(lat_b) <= tol_b                       # auto-align off: the original 0.4 m tolerance
 
         c = np.zeros((n, R), bool)
         sel = lambda g: goal == gi[g]

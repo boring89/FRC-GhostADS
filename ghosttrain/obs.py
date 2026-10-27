@@ -92,7 +92,7 @@ class Encoder:
         m[..., gi["processor"]] = prm.processor
         m[..., gi["net"]] = prm.net
         m[..., gi["climb"]] = prm.climb > 0
-        m[..., gi["align_score"]] = prm.levels[..., 1:].any(-1)     # L2-L4 branches: auto-align needs one of them
+        m[..., gi["align_score"]] = (prm.levels[..., 1:].any(-1) & bool(self.g.model.get("auto_align", False)))
         return m
 
     def caps(self, prm):

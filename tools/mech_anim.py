@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ghostsim.mechanism import (ALGAE_R, COL, EE_LEN, INTAKE_LEN, INTAKE_PIVOT, WRIST_MIN_DEG, Box, Sphere,
+from ghostsim.mechanism import (ALGAE_R, COL, EE_LEN, H_MAX, INTAKE_LEN, INTAKE_PIVOT, WRIST_MIN_DEG, Box, Sphere,
                                 ee_wrist, intake_tip, pose, rot_y)
 from tools.mech_view import label, render
 
@@ -109,13 +109,13 @@ SEGMENTS = [
     dict(name="intake picks coral from the floor", dur=0.8, a=State(0, 80, -10), b=State(0, 80, -10), coral="intake"),
     dict(name="intake stows with coral", dur=1.0, a=State(0, 80, -10), b=State(0, 80, 75), coral="intake"),
     dict(name="coral handed to end effector", dur=1.0, a=State(0, 80, 75), b=State(0, 0, 75), coral="handoff"),
-    dict(name="elevator to L4 (1.83 m)", dur=2.0, a=State(0, 0, 75), b=State(1.42, 0, 75), coral="ee"),
-    dict(name="score coral on L4", dur=0.8, a=State(1.42, 0, 75), b=State(1.42, 0, 75), coral="drop"),
-    dict(name="elevator down, wrist to floor", dur=1.6, a=State(1.42, 0, 75), b=State(0, -20, 75)),
-    dict(name="algae picked from the floor", dur=1.0, a=State(0, -20, 75), b=State(0, -20, 75), algae="floor_to_ee"),
-    dict(name="algae into processor", dur=0.8, a=State(0, -20, 75), b=State(0, -20, 75), algae="ee"),
-    dict(name="processor release", dur=0.6, a=State(0, -20, 75), b=State(0, -20, 75), algae="launch"),
-    dict(name="return to stow", dur=1.6, a=State(0, -20, 75), b=STOW),
+    dict(name="elevator to L4 (1.83 m)", dur=2.0, a=State(0, 0, 75), b=State(H_MAX, 0, 75), coral="ee"),
+    dict(name="score coral on L4", dur=0.8, a=State(H_MAX, 0, 75), b=State(H_MAX, 0, 75), coral="drop"),
+    dict(name="elevator down, wrist to floor", dur=1.6, a=State(H_MAX, 0, 75), b=State(0, WRIST_MIN_DEG, 75)),
+    dict(name="algae picked from the floor", dur=1.0, a=State(0, WRIST_MIN_DEG, 75), b=State(0, WRIST_MIN_DEG, 75), algae="floor_to_ee"),
+    dict(name="algae into processor", dur=0.8, a=State(0, WRIST_MIN_DEG, 75), b=State(0, WRIST_MIN_DEG, 75), algae="ee"),
+    dict(name="processor release", dur=0.6, a=State(0, WRIST_MIN_DEG, 75), b=State(0, WRIST_MIN_DEG, 75), algae="launch"),
+    dict(name="return to stow", dur=1.6, a=State(0, WRIST_MIN_DEG, 75), b=STOW),
 ]
 
 

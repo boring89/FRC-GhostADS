@@ -1,8 +1,8 @@
 {
  "name": "ours",
  "verified": false,
- "_note": "DESIGN SPEC (team lead, 2026-10-27 update): swerve, elevator scores coral L1-L4 and algae into NET or PROCESSOR, one ground intake for coral+algae, takes coral from the coral station, removes algae from the REEF and the floor. Capabilities are FIXED (not randomised). No climb. Frame 25-27 in. Numbers not in the spec are PLACEHOLDERS.",
- "frame_in": 26.0,
+ "_note": "UNIFIED WITH FRC 254 (2025 Technical Binder, Undertow): 29.5 in frame, 13.2 ft/s swerve, 52 in elevator in ~0.3 s, 0.15 s intake deploy, 0.2 s wrist 210 deg, deep cage climb. Mass, friction, placement times and intake width are NOT in the binder: placeholders (verified: false).",
+ "frame_in": 29.5,
  "bumper_t_in": 3.25,
  "module_inset_m": 0.065,
  "bumper_z_m": [
@@ -13,7 +13,7 @@
  "mass_kg": 58.0,
  "_mass": "R103/R408: <=115 lb robot + bumpers + battery, total ~61-67 kg; range is 50-66 kg",
  "drive": {
-  "free_speed_mps": 5.0,
+  "free_speed_mps": 4.02,
   "stall_force_N": 930.0,
   "stall_current_A": 366.0,
   "current_limit_A": 80.0,
@@ -27,7 +27,7 @@
   "other_load_A": 5.0
  },
  "control": {
-  "max_speed_mps": 4.6,
+  "max_speed_mps": 4.0,
   "max_omega_radps": 9.0,
   "deadband": 0.05
  },
@@ -45,23 +45,23 @@
    3,
    4
   ],
-  "climb": "none",
+  "climb": "deep",
   "times_s": {
    "coral_station": 0.5,
-   "coral_floor": 0.4,
-   "algae_floor": 0.4,
-   "algae_reef": 0.8,
-   "score_L1": 0.6,
-   "score_L2": 1.0,
-   "score_L3": 1.3,
-   "score_L4": 1.7,
+   "coral_floor": 0.3,
+   "algae_floor": 0.3,
+   "algae_reef": 0.6,
+   "score_L1": 0.4,
+   "score_L2": 0.5,
+   "score_L3": 0.6,
+   "score_L4": 0.7,
    "processor": 0.5,
-   "net": 1.8,
-   "climb": 3.0,
+   "net": 0.6,
+   "climb": 2.0,
    "align_score": 0.5
   },
   "intake_depth_m": 0.15,
-  "intake_half_width_m": 0.28,
+  "intake_half_width_m": 0.3,
   "held_offset_m": {
    "coral": [
     0.15,
@@ -79,8 +79,8 @@
   "_note": "per-reset ranges. frame 25-27 in per spec; the rest are MODEL choices.",
   "uniform": {
    "frame_in": [
-    25.0,
-    27.0
+    29.0,
+    30.0
    ],
    "mass_kg": [
     50.0,
@@ -91,8 +91,8 @@
     1.05
    ],
    "drive.free_speed_mps": [
-    4.4,
-    5.4
+    3.8,
+    4.3
    ],
    "drive.mu_static": [
     0.95,
@@ -103,8 +103,8 @@
     100.0
    ],
    "control.max_speed_mps": [
-    3.8,
-    4.8
+    3.6,
+    4.2
    ],
    "control.max_omega_radps": [
     6.5,
@@ -225,5 +225,13 @@
    "cx": 320.0,
    "cy": 240.0
   }
- ]
+ ],
+ "_source": {
+  "frame_in": "binder p.12: 29.5 in x 29.5 in frame outer dims",
+  "drive.free_speed_mps": "binder p.12: ~13.2 ft/s free speed",
+  "elevator": "binder p.16: ~52 in travel in ~0.3 s",
+  "intake": "binder p.13: deploy ~0.15 s, ~15 ft/s roller surface",
+  "end_effector": "binder p.18: wrist 210 deg in ~0.2 s, coral wheel ~13 ft/s",
+  "climb": "binder p.17: deep cage climber (claw + winch)"
+ }
 }
