@@ -17,6 +17,10 @@ from ghostsim import geometry as geo
 from ghostsim.robots import ALLIANCE, R
 
 SCORE_GOALS = ("score_L1", "score_L2", "score_L3", "score_L4")
+# controller gains (tuned with /tmp-style sweeps in tests/test_align.py timing; see docs/training.md)
+V_MAX = 3.0          # m/s cap on the approach
+V_GAIN = 4.0         # speed = V_GAIN * distance (proportional part)
+YAW_GAIN = 10.0      # rad/s per rad of heading error
 
 
 def _pose(sim):
@@ -73,11 +77,11 @@ def drive(sim, pos, yaw, tgt, tyaw):
     p = sim.prm
     err = tgt - pos
     dist = np.linalg.norm(err, axis=-1, keepdims=True)
-    vmax = np.minimum(p.max_v, 2.0)[..., None]
+    vmax = np.minimum(p.max_v, V_MAX)[..., None]
     # speed profile: 2.5 /s * distance, but never below a stick of ~0.12 (the chassis deadband is 0.05 per axis, so
     # smaller commands do not move the robot at all); the floor is off within 3 cm so the robot settles
     floor = np.where(dist > 0.03, 0.55, 0.0)
-    speed = np.maximum(np.clip(2.5 * dist, 0.0, None), floor)
+    speed = np.maximum(np.clip(V_GAIN * dist, 0.0, None), floor)
     speed = np.minimum(vmax, speed)
     v = err / np.maximum(dist, 1e-9) * speed
     d = pos[:, :, None] - pos[:, None]                                    # (N,R,R,2) from j to i
@@ -89,7 +93,7 @@ def drive(sim, pos, yaw, tgt, tyaw):
     herr = geo.wrap(tyaw - yaw)
     # proportional, but never below a turn rate that clears the deadband (0.05 of full turn) when the heading error is
     # larger than 0.02 rad; otherwise the robot stalls ~4 deg off target and never meets the 3 deg tolerance
-    om = np.clip(6.0 * herr, -0.8 * p.max_w, 0.8 * p.max_w)
+    om = np.clip(YAW_GAIN * herr, -0.8 * p.max_w, 0.8 * p.max_w)
     flip = np.where(ALLIANCE == 0, 1.0, -1.0)[None, :, None]
     stick = np.concatenate([flip * v / p.max_v[..., None], (om / p.max_w)[..., None]], -1)
     return np.clip(stick, -1.0, 1.0)
@@ -141,7 +145,10 @@ def apply(sim, stick, goal):
         wp = tgt + 0.5 * normal
         tangent = np.stack([-normal[..., 1], normal[..., 0]], -1)
         lat = np.abs(((tgt - pos_all) * tangent).sum(-1))
-        goal_pt = np.where((lat > 0.03)[..., None], wp, tgt)        # straight in only once laterally aligned
+        # waypoint only when the lateral error is large and the robot is still far: a small offset is corrected
+        # straight in (the corner clearance at the hexagon is ~0.1 m), which saves the detour
+        dist = np.linalg.norm(tgt - pos_all, axis=-1)
+        goal_pt = np.where(((lat > 0.12) & (dist > 0.8))[..., None], wp, tgt)
         ctrl = drive(sim, pos_all, yaw_all, goal_pt, tyaw)
         out = np.where(active[..., None], ctrl, out)
         inside = aligned_error(sim, pos_all, yaw_all, tgt, tyaw)
@@ -150,7 +157,7 @@ def apply(sim, stick, goal):
         moved = np.linalg.norm(pos_all - gs.align_last, axis=-1)
         gs.align_last = pos_all.copy()
         gs.align_stuck = np.where(active & ~inside & (moved < 0.01), gs.align_stuck + dt, np.where(active, 0.0, gs.align_stuck))
-        give_up = active & ~inside & (gs.align_stuck > 2.0)
+        give_up = active & ~inside & (gs.align_stuck > g.model.get("align_stuck_s", 1.0))
         if give_up.any():
             cand = gs.align_side * 6 + gs.align_face
             ee, rr = np.nonzero(give_up)

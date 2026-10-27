@@ -94,9 +94,12 @@ inference on GPU is slow while Godot renders on the same GPU.
   MAPPO from this BC is NOT run yet (needs a go-ahead). Intent predictor retrained (acc 0.82, scoring recall 0.71).
 
 ## Known issues / next steps
-- Align efficiency: approach is slow with teammates around (2-15 s); baseline score fell ~15 %. Tune before long training.
-- Align uses the KF estimate when sensors are on: its 5 cm tolerance is close to the estimate error; training runs
-  with sensors off (true pose).
+- Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
+  after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.
+- Align with sensors on: the controller uses the KF estimate, but scoring uses the true pose. With the estimate
+  initialised correctly, 6/8 runs reached the estimated alignment and the true distance was 6-13 cm: the 5 cm branch
+  tolerance is not reliably met from the estimate. Training runs with sensors off (true pose); the live broadcast
+  (sensors on) therefore shows scoring misses that training does not have.
 - Goal entropy rises during PPO (0.07 -> 1.5). `ent_goal` 0.01 is probably too high; use 0.003 and compare.
 - The baseline's own fouls and stuck behaviour limit the BC start; league self-play should move past it.
 - Shaping targets come from the baseline's plan (potential-based, so it does not change the optimal policy in theory).

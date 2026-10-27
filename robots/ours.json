@@ -58,7 +58,7 @@
    "processor": 0.5,
    "net": 1.8,
    "climb": 3.0,
-   "align_score": 0.7
+   "align_score": 0.5
   },
   "intake_depth_m": 0.15,
   "intake_half_width_m": 0.28,
