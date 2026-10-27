@@ -164,6 +164,13 @@ class Sensors:
 
     def _visible(self, body, e, r):
         """Count visible tags per camera for selected (env, robot) pairs -> (M,C), mean distance (M,C)."""
+        vis, dist = self.visible_mask(body, e, r)
+        cnt = vis.sum(-1)
+        dm = (dist * vis).sum(-1) / np.maximum(cnt, 1)
+        return cnt, dm
+
+    def visible_mask(self, body, e, r):
+        """Per (selected pair, camera, tag) visibility (M,C,T) and distance (M,C,T): the rule used by the detector."""
         v, cams = self.v, self.cams
         pose = body.pose[e, r]                                                            # (M,3)
         cpos, crot = cams.world_poses(pose)                                               # (M,C,3), (M,C,3,3)
@@ -195,9 +202,7 @@ class Sensors:
                                       self.prm_half[ee[:, None], others], np.cos(th), np.sin(th))
             blocked |= (hit & (self.prm_height[ee[:, None], others] > low[:, None])).any(-1)
             vis[mi[blocked], ci[blocked], ti[blocked]] = False
-        cnt = vis.sum(-1)
-        dm = (dist * vis).sum(-1) / np.maximum(cnt, 1)
-        return cnt, dm
+        return vis, dist
 
     def bind(self, prm):
         self.prm_half, self.prm_height = prm.half, prm.height

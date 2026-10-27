@@ -32,6 +32,9 @@ class State:
         self.processor, self.net = i(n, 2), i(n, 2)
         self.cage_occ, self.cage_deep = -np.ones((n, 6), np.int64), b(n, 6)
         self.score, self.fouls = z(n, 2), z(n, 2)
+        # points by category per alliance: 0 LEAVE, 1 CORAL, 2 ALGAE (net + processor), 3 BARGE (park/cage), 4 PENALTY
+        # (points received from opponent fouls). Sum over categories == score (tested).
+        self.cat = z(n, 2, 5)
         self.prev_pair, self.prev_cage = b(n, len(PAIRS)), b(n, R, 6)
         self.g421_t = z(n, 2)
         # not game points: damage tally (own robots hit hard), teammate-contact timer (reward shaping only)
@@ -220,6 +223,7 @@ class Game(GameBase):
         st.cage_occ[idx] = -1
         st.cage_deep[idx] = prm.climb[idx] != 1                          # cage k <-> driver station k
         st.score[idx], st.fouls[idx] = 0, 0
+        st.cat[idx] = 0
         st.prev_pair[idx], st.prev_cage[idx], st.g421_t[idx] = False, False, 0
         st.damage[idx], st.dmg_t[idx], st.press_t[idx] = 0, 0, 0
         st.push_events[idx], st.prev_tm[idx] = 0, False
@@ -363,7 +367,7 @@ class Game(GameBase):
                         st.hold_algae[e, r] = True
                 elif g == "score_L1" and st.l1[e, a, f] < self.l1_cap:
                     st.l1[e, a, f] += 1; st.l1_auto[e, a, f] += ph == 0
-                    st.hold_coral[e, r] = False; pts[e, r] += P["coral"]["L1"][ph]
+                    st.hold_coral[e, r] = False; pts[e, r] += P["coral"]["L1"][ph]; st.cat[e, a, 1] += P["coral"]["L1"][ph]
                 elif g in ("score_L2", "score_L3", "score_L4"):
                     li = int(g[-1]) - 2
                     hi_ = st.reef_algae[e, a, f] and self.block["high" if self.algae_high[f] else "low"][li]
@@ -372,12 +376,13 @@ class Game(GameBase):
                         if not st.branch[e, a, f, s, li] and not hi_:
                             st.branch[e, a, f, s, li] = True; st.branch_auto[e, a, f, s, li] = ph == 0
                             st.hold_coral[e, r] = False; pts[e, r] += P["coral"][g[-2:]][ph]
+                            st.cat[e, a, 1] += P["coral"][g[-2:]][ph]
                             break
                 elif g == "processor":
                     st.processor[e, a] += 1; st.hp_stock[e, 1 - a] += 1
-                    st.hold_algae[e, r] = False; pts[e, r] += P["processor"][ph]
+                    st.hold_algae[e, r] = False; pts[e, r] += P["processor"][ph]; st.cat[e, a, 2] += P["processor"][ph]
                 elif g == "net":
-                    st.net[e, a] += 1; st.hold_algae[e, r] = False; pts[e, r] += P["net"][ph]
+                    st.net[e, a] += 1; st.hold_algae[e, r] = False; pts[e, r] += P["net"][ph]; st.cat[e, a, 2] += P["net"][ph]
                 elif g == "climb":
                     cg = cage_sel[e, r]
                     if st.cage_occ[e, cg] < 0:
@@ -390,7 +395,7 @@ class Game(GameBase):
             st.hp_timer[e, a] = 0.0
             st.hp_stock[e, a] -= 1
             if rng.random() < m["hp_net_success"]:
-                st.net[e, a] += 1; bonus[e, a] += P["net"][1]
+                st.net[e, a] += 1; bonus[e, a] += P["net"][1]; st.cat[e, a, 2] += P["net"][1]
             else:
                 side = rng.choice([-1, 1])
                 xy = np.array([self.mid[0] + side * rng.uniform(0.6, 1.5), rng.uniform(*self.net_y[a])])
@@ -404,6 +409,7 @@ class Game(GameBase):
 
         for a in range(2):
             st.score[:, a] += pts[:, ALLIANCE == a].sum(1) + bonus[:, a] + foul[:, ALLIANCE != a].sum(1)
+            st.cat[:, a, 4] += foul[:, ALLIANCE != a].sum(1)
         return pts, foul, bonus
 
     def _damage(self, st, body, live, dt):
@@ -488,7 +494,7 @@ class Game(GameBase):
         ext_x = prm.half[..., 0] * np.abs(np.cos(th)) + prm.half[..., 1] * np.abs(np.sin(th))
         left = np.abs(body.pose[..., 0] - self.start_x[ALLIANCE]) > ext_x
         pts += (left & mask[:, None]) * self.points["leave"][0]
-        self._add(st, pts)
+        self._add(st, pts, 0)
         return pts
 
     def end_match(self, st, body, prm, mask):
@@ -502,12 +508,13 @@ class Game(GameBase):
             pts[:, r] = np.where(st.climbed[:, r], np.where(deep, self.points["cage"]["deep"], self.points["cage"]["shallow"]),
                                  in_bz[:, r] * self.points["park"])
         pts *= mask[:, None]
-        self._add(st, pts)
+        self._add(st, pts, 3)
         return pts
 
-    def _add(self, st, pts):
+    def _add(self, st, pts, cat):
         for a in range(2):
             st.score[:, a] += pts[:, ALLIANCE == a].sum(1)
+            st.cat[:, a, cat] += pts[:, ALLIANCE == a].sum(1)
 
     # ------------------------------------------------------------------ observation / render
     def privileged(self, st):

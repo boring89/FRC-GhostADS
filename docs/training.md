@@ -63,7 +63,21 @@ the teacher observation (`others`, now 36 features; opponents get zeros). Weight
   before relying on it (collection currently supports the baseline only).
 - Changing the observation size means the teacher must be trained from scratch.
 
+## Live views (ghosttrain/broadcast.py, ghosttrain/dashboard.py)
+`uv run python -m ghosttrain.dashboard runs/teacher3` then
+- http://localhost:8777/live : broadcast 1280x720 (field view + two robot POVs, red/blue scoreboard, training step, 10 s result card)
+- http://localhost:8777/robot?id=N : one robot POV (640x480) with the AprilTags the detector sees and the robot status
+
+Rendering happens only while a page is open. Default parallel sim processes: 6 (`TrainCfg.n_procs`).
+Measured (clean machine, 12 cores, GTX 1070 shared with nothing else): sim 12 procs 12.4k sps, 6 procs 9.8k sps.
+Live: a policy tick is ~26 ms on one core; the render thread draws at 30 fps and interpolates poses between ticks.
+Broadcast alone: 28.7 fps. With the robot page open: broadcast 22 fps, robot page 11 fps. 30 fps is not reached yet.
+Two pitfalls found: separate Godot clients need separate ports (default port depends on pid); policy inference on
+GPU is slow while Godot renders on the same GPU (inference is on CPU in the broadcast).
+
 ## Known issues / next steps
+- Sensor KF: estimate error grows to several metres over 20 s while its covariance stays ~0.1 m (overconfident filter).
+  Visible on the robot page (`est err`). Needs a fix before any estimate-based control (e.g. auto-align) uses it.
 - Goal entropy rises during PPO (0.07 -> 1.5). `ent_goal` 0.01 is probably too high; use 0.003 and compare.
 - The baseline's own fouls and stuck behaviour limit the BC start; league self-play should move past it.
 - Shaping targets come from the baseline's plan (potential-based, so it does not change the optimal policy in theory).

@@ -194,3 +194,16 @@ def test_pieces_conserved_random_rollout():
     coral = gs.stock.sum(1) + gs.coral.active.sum(1) + gs.hold_coral.sum(1) + gs.branch.sum((1, 2, 3, 4)) + gs.l1.sum((1, 2))
     algae = gs.reef_algae.sum((1, 2)) + gs.algae.active.sum(1) + gs.hold_algae.sum(1) + gs.hp_stock.sum(1) + gs.net.sum(1)
     assert (coral == 126).all() and (algae == 18).all()
+
+
+def test_category_points_add_up_to_score():
+    """Per-category points (LEAVE/CORAL/ALGAE/BARGE/PENALTY) must add up to the match score, both alliances."""
+    from ghostsim import SimCfg, VecSim
+    from ghosttrain.baseline import Baseline
+    sim = VecSim(SimCfg(n_envs=8, sensors=False, start_mode="auto", seed=9))
+    bl = Baseline(sim.game)
+    for _ in range(int(round(sim.end_t / 0.1))):
+        sim.step(*bl.act(sim, bl.plan(sim)))
+    cat = sim.gs.cat.sum(-1)
+    assert np.allclose(cat, sim.score, atol=1e-6), (cat[0], sim.score[0])
+    assert sim.gs.cat[..., 1].sum() > 0 and sim.gs.cat[..., 2].sum() > 0 and sim.gs.cat[..., 0].sum() > 0

@@ -25,7 +25,7 @@ KEYS = ("self", "others", "pieces", "pmask", "faces", "lm", "gmask")
 
 @dataclass
 class TrainCfg:
-    n_procs: int = 12
+    n_procs: int = 6                # measured: 12 -> 6 procs costs ~20 % sps (12.4k -> 9.8k), frees CPU and GPU for the live view
     envs_per_proc: int = 32
     horizon: int = 64
     epochs: int = 3
