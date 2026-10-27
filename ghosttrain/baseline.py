@@ -27,6 +27,10 @@ class Baseline:
         obst = [game.polys.center[i] for i in range(len(game.polys))]
         rad = [1.55, 1.55, 0.75] + [0.45] * 6
         self.obst_c, self.obst_r = np.array(obst), np.array(rad)
+        # keep-out zones: OPPONENT cages are off-limits in TELEOP (G418, MAJOR FOUL per contact)
+        self.opp_cage_xy = game.cage_xy[np.arange(6).reshape(2, 3)[1 - ALLIANCE]]          # (R,3,2) per robot slot
+        self.cage_half_diag = game.cfg["field"]["cages"]["size"] * 0.0254 / 2 * np.sqrt(2)
+        self.keepout_margin = 0.10
 
     # ------------------------------------------------------------------ helpers
     def _score_target(self, sim, pos, hx):
@@ -111,7 +115,8 @@ class Baseline:
             vec = tgt - pos
             dirv = vec / np.maximum(np.linalg.norm(vec, axis=-1, keepdims=True), 1e-9)
             stand = tgt - dirv * (hx[..., None] + 0.07)
-            cost = np.where(cap & np.isfinite(dmin), dmin * bias, np.inf)
+            bad = self._in_keepout(stand, hx)
+            cost = np.where(cap & np.isfinite(dmin) & ~bad, dmin * bias, np.inf)
             upd = cost < best
             best = np.where(upd, cost, best); goal = np.where(upd, self.gi[gname], goal)
             xy = np.where(upd[..., None], stand, xy); yaw = np.where(upd, np.arctan2(vec[..., 1], vec[..., 0]), yaw)
@@ -196,6 +201,16 @@ class Baseline:
         goal = np.full((n, R), self.gi["climb"])
         return goal, xy, yaw, ok.any(-1)
 
+    def _keepout_radius(self, hx):
+        """Centre-to-cage distance below which a robot (circumscribed radius hx*sqrt2) would touch an opponent cage."""
+        return self.cage_half_diag + hx * np.sqrt(2) + self.keepout_margin
+
+    def _in_keepout(self, xy, hx):
+        """xy (N,R,2) points, hx (N,R): True if a point is inside any opponent-cage keep-out disc. Returns (N,R)."""
+        d = xy[:, :, None] - self.opp_cage_xy[None]                                      # (N,R,3,2)
+        dd = np.linalg.norm(d, axis=-1)
+        return (dd < self._keepout_radius(hx)[..., None]).any(-1)
+
     def _drive(self, sim, pos, yaw, tgt, tyaw):
         p, g = sim.prm, self.g
         n = pos.shape[0]
@@ -217,6 +232,19 @@ class Baseline:
         rr = self.obst_r[None, None] + p.half[..., 0][..., None] * 0.6
         w = np.clip((rr - dd) / 0.5, 0, 1)
         v += ((d / np.maximum(dd[..., None], 1e-9)) * w[..., None]).sum(2) * vmax[..., None] * att * 0.8
+        # hard keep-out around opponent cages: push out, and remove any velocity that drives into the disc
+        hx = p.half[..., 0]
+        rk = self._keepout_radius(hx)                                                   # (N,R)
+        dc = pos[:, :, None] - self.opp_cage_xy[None]                                   # (N,R,3,2)
+        dcn = np.linalg.norm(dc, axis=-1)
+        u = dc / np.maximum(dcn[..., None], 1e-9)
+        pen = np.clip((rk[..., None] + 0.35 - dcn) / 0.35, 0.0, 1.0)                    # 0 far, 1 at the boundary
+        v += (u * pen[..., None]).sum(2) * vmax[..., None] * 2.0
+        inside = (dcn < rk[..., None] + 0.05)
+        for k in range(3):
+            into = (v * u[:, :, k]).sum(-1, keepdims=True) < 0
+            cut = inside[:, :, k, None] & into
+            v = np.where(cut, v - (v * u[:, :, k]).sum(-1, keepdims=True) * u[:, :, k], v)
         sp = np.linalg.norm(v, axis=-1, keepdims=True)
         v = v / np.maximum(sp / vmax[..., None], 1.0)
         # heading: face the target yaw when close, otherwise the direction of travel
