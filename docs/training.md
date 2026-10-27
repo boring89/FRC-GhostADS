@@ -91,6 +91,8 @@ inference on GPU is slow while Godot renders on the same GPU.
   Measured (16 matches, auto start): score ~105/100 (before align: ~121/130 after keep-out), 51 % of coral-holding
   ticks aligned. Align approaches are slower than the old direct approach: this is a cost, not yet tuned.
 - BC (runs/bc5, 120 rounds, 14 goals, S=48): goal accuracy 0.980. Evaluation (96 episodes): win 0.042, score 52 vs 100.
+- BC on the tuned align baseline (runs/bc6): goal accuracy 0.975, evaluation win 0.026, score 50 vs 102. BC only clones;
+  MAPPO from it is the next step (not started).
   MAPPO from this BC is NOT run yet (needs a go-ahead). Intent predictor retrained (acc 0.82, scoring recall 0.71).
 
 ## Known issues / next steps
