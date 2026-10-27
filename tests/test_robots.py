@@ -16,7 +16,8 @@ def test_ours_matches_design_spec():
     assert 25.0 <= frame.min() and frame.max() <= 27.0 and frame.std() > 0.3
     assert (p.half[..., 0] == p.half[..., 1]).all()                  # square
     assert p.levels.all() and p.net.all() and p.floor_coral.all() and p.floor_algae.all() and p.station.all()
-    assert not p.processor.any() and not p.algae_reef.any() and (p.climb == 0).all()
+    assert p.processor.all() and p.algae_reef.all() and (p.climb == 0).all()     # spec update: processor + reef algae
+    assert (p.processor == p.processor[0, 0]).all() and (p.algae_reef == p.algae_reef[0, 0]).all()   # fixed, not randomised
     assert (p.max_v <= 0.95 * p.free_speed + 1e-9).all()
     assert 50 <= p.mass.min() and p.mass.max() <= 66
     assert (np.abs(p.offsets) < p.half[..., None, :] - 3.25 * IN).all()   # modules inside the frame
@@ -39,7 +40,7 @@ def test_randomised_episodes_differ_per_reset():
     assert not np.allclose(sim.prm.half[0, 0], before[0, 0]) and np.allclose(sim.prm.half[1:], before[1:])
 
 
-def test_elevator_robot_cannot_climb_or_use_processor():
+def test_elevator_robot_cannot_climb_but_uses_processor():
     sim = make_sim(full=False)
     g = sim.game
     at_face(sim, 0, 0, 3)
@@ -53,4 +54,6 @@ def test_elevator_robot_cannot_climb_or_use_processor():
     sim.gs.hold_algae[:, 0] = True
     gl[:, 0] = g.goals.index("processor")
     run(sim, st, gl, 20)
-    assert sim.gs.hold_algae[0, 0]                                    # no processor mechanism
+    assert not sim.gs.hold_algae[0, 0]                                # processor scored (algae released)
+    assert sim.gs.processor[0, 0] == 1
+    assert sim.prm.climb[0, 0] == 0 and not sim.gs.climbed[0, 0]      # still no climb

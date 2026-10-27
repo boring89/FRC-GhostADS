@@ -1,7 +1,7 @@
 {
  "name": "ours",
  "verified": false,
- "_note": "DESIGN SPEC (team lead, 2026-10-26): swerve, elevator that scores L1-L4 coral and algae into the net, one ground intake for coral+algae, frame 25x25..27x27 in. Everything numeric below that is not in that spec is a PLACEHOLDER (drive, battery, cameras, times). Randomised per episode (see 'randomize') because no real robot exists yet.",
+ "_note": "DESIGN SPEC (team lead, 2026-10-27 update): swerve, elevator scores coral L1-L4 and algae into NET or PROCESSOR, one ground intake for coral+algae, takes coral from the coral station, removes algae from the REEF and the floor. Capabilities are FIXED (not randomised). No climb. Frame 25-27 in. Numbers not in the spec are PLACEHOLDERS.",
  "frame_in": 26.0,
  "bumper_t_in": 3.25,
  "module_inset_m": 0.065,
@@ -36,8 +36,8 @@
   "station": true,
   "floor_coral": true,
   "floor_algae": true,
-  "algae_reef": false,
-  "processor": false,
+  "algae_reef": true,
+  "processor": true,
   "net": true,
   "levels": [
    1,
