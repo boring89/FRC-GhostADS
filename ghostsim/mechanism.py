@@ -189,3 +189,31 @@ def all_faces(solids):
         else:
             faces += box_faces(s)
     return faces
+
+
+# ---------------------------------------------------------------- renderer slots (fixed layout per robot)
+SLOTS = 32                  # solids per robot in the renderer (pose() gives ~20)
+SLOT_W = 20                 # [visible, kind(0 box, 1 sphere), centre(3), half|radius(3), basis rows (9), colour(3)]
+_MX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])    # field-local -> Godot (matches main.gd gv)
+
+
+def slots_for(solids):
+    """Robot-local solids -> (SLOTS, SLOT_W) float32 in Godot axes (unused slots have visible = 0)."""
+    out = np.zeros((SLOTS, SLOT_W), np.float32)
+    for i, s in enumerate(solids[:SLOTS]):
+        if isinstance(s, Sphere):
+            c = _MX @ s.center
+            out[i, 0], out[i, 1] = 1.0, 1.0
+            out[i, 2:5] = c
+            out[i, 5:8] = s.radius
+            out[i, 8:17] = np.eye(3).ravel()
+        else:
+            c = _MX @ s.center
+            R = _MX @ s.R @ _MX.T
+            half = np.array([s.half[0], s.half[2], s.half[1]])          # half sizes in Godot axes
+            out[i, 0], out[i, 1] = 1.0, 0.0
+            out[i, 2:5] = c
+            out[i, 5:8] = half
+            out[i, 8:17] = R.ravel()
+        out[i, 17:20] = s.color
+    return out

@@ -110,12 +110,14 @@ class _Worker:
         shape_pot = W_POTENTIAL * (GAMMA * phi2 - self.phi)
         self.phi = phi2
         final = np.full((self.n, 2), np.nan)
+        final_cat = np.full((self.n, 2, 5), np.nan)     # category points before the auto-reset below
         win = np.zeros((self.n, R_))
         done = info.done
         trunc = (self.tick >= self.trunc_at) & ~done
         self.trunc_at[trunc] = 10 ** 9
         if done.any():
             final[done] = sim.score[done]
+            final_cat[done] = sim.gs.cat[done]
             w = np.sign(sim.score[done][:, ALLIANCE] - sim.score[done][:, 1 - ALLIANCE])
             win[done] = w * W_WIN
             sim.reset(done)
@@ -140,7 +142,7 @@ class _Worker:
         return {"obs": self._obs(), "act_stick": act_stick.astype(np.float32), "act_goal": act_goal,
                 "r_team": (team + win + pen).astype(np.float32),
                 "r_shape": (shape_acq + shape_pot).astype(np.float32), "done": done.copy(),
-                "final": final, "pts": info.points.astype(np.float32), "fouls": info.fouls.astype(np.float32)}
+                "final": final, "final_cat": final_cat, "pts": info.points.astype(np.float32), "fouls": info.fouls.astype(np.float32)}
 
     def set_ctrl(self, c, noise=None):
         self.ctrl = np.asarray(c, bool)

@@ -6,6 +6,8 @@ extends Node
 
 const MAGIC := "GHST"
 const BUMPER_T := 0.08
+const SLOTS := 32                 # solids per robot (ghostsim/mechanism.py SLOTS)
+const SLOT_W := 20                # floats per solid: visible, kind, centre(3), half|radius(3), basis cols(9), colour(3)
 const FONTS := ["DejaVu Sans", "Liberation Sans", "Noto Sans", "FreeSans", "Ubuntu", "DejaVu Serif",
 		"Liberation Serif", "Noto Sans Mono", "DejaVu Sans Mono", "Cantarell"]
 
@@ -229,10 +231,12 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 	var dyn := Node3D.new()
 	vp.add_child(dyn)
 	var robots := []
+	var mech_pool := []
 	for r in 6:
 		var n := Node3D.new()
 		dyn.add_child(n)
 		robots.append(n)
+		mech_pool.append(make_mech_pool(n))
 	var coral := multimesh(CylinderMesh.new(), int(pieces["mc"]), mat(Color(0.95, 0.95, 0.93), 0.6), false)
 	var cm: CylinderMesh = coral.multimesh.mesh
 	cm.top_radius = pieces["coral_od"] / 2.0
@@ -260,7 +264,7 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 	var crowd := multimesh(BoxMesh.new(), 0, mat(Color.WHITE, 0.9), true)
 	crowd.material_override.vertex_color_use_as_albedo = true
 	vp.add_child(crowd)
-	return {"vp": vp, "world": vp.find_world_3d(), "static": stat, "dyn": dyn, "robots": robots, "coral": coral,
+	return {"vp": vp, "world": vp.find_world_3d(), "static": stat, "dyn": dyn, "robots": robots, "mech": mech_pool, "coral": coral,
 			"algae": algae, "cages": cages, "markers": markers, "crowd": crowd, "env": env, "sun": sun, "mats": mats}
 
 
@@ -343,10 +347,31 @@ func prism(verts: Array, z0: float, z1: float) -> ArrayMesh:
 
 
 # ---------------------------------------------------------------- appearance / DR
+## 254-style mechanism: a fixed pool of unit boxes and unit spheres per robot, posed every frame from the "mech" array.
+func make_mech_pool(parent: Node3D) -> Array:
+	var pool := []
+	for i in SLOTS:
+		var box := MeshInstance3D.new()
+		box.mesh = BoxMesh.new()
+		box.material_override = mat(Color.WHITE, 0.5, 0.3)
+		box.visible = false
+		parent.add_child(box)
+		var sph := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.5
+		sm.height = 1.0
+		sm.radial_segments = 16
+		sm.rings = 8
+		sph.mesh = sm
+		sph.material_override = mat(Color.WHITE, 0.5, 0.3)
+		sph.visible = false
+		parent.add_child(sph)
+		pool.append([box, sph])
+	return pool
+
+
 func appearance(h: Dictionary) -> void:
 	var e: Dictionary = envs[int(h["env"])]
-	for r in 6:
-		build_robot(e["robots"][r], h["robots"][r])
 	var dr: Dictionary = h["dr"]
 	var env: Environment = e["env"].environment
 	env.background_color = Color(dr["bg_rgb"][0], dr["bg_rgb"][1], dr["bg_rgb"][2])
@@ -501,6 +526,33 @@ func place_env(ei: int, a: Dictionary, check: bool, echo: Array) -> void:
 		if check:
 			var g := node.global_transform
 			echo.append([ei, r, g.origin.x, -g.origin.z, g.origin.y, atan2(-g.basis.x.z, g.basis.x.x)])
+	if a.has("mech"):
+		var mm_: PackedFloat32Array = a["mech"]
+		for r in 6:
+			var pool: Array = e["mech"][r]
+			for i in SLOTS:
+				var o := ((ei * 6 + r) * SLOTS + i) * SLOT_W
+				var box: MeshInstance3D = pool[i][0]
+				var sph: MeshInstance3D = pool[i][1]
+				if mm_[o] < 0.5:
+					box.visible = false
+					sph.visible = false
+					continue
+				var col := Color(mm_[o + 17], mm_[o + 18], mm_[o + 19])
+				var origin := Vector3(mm_[o + 2], mm_[o + 3], mm_[o + 4])
+				if mm_[o + 1] < 0.5:                   # box: basis columns scaled by full size
+					var bx := Vector3(mm_[o + 8], mm_[o + 11], mm_[o + 14]) * (2.0 * mm_[o + 5])
+					var by := Vector3(mm_[o + 9], mm_[o + 12], mm_[o + 15]) * (2.0 * mm_[o + 6])
+					var bz := Vector3(mm_[o + 10], mm_[o + 13], mm_[o + 16]) * (2.0 * mm_[o + 7])
+					box.transform = Transform3D(Basis(bx, by, bz), origin)
+					box.visible = true
+					sph.visible = false
+					(box.material_override as StandardMaterial3D).albedo_color = col
+				else:                                  # sphere (algae)
+					sph.transform = Transform3D(Basis.from_scale(Vector3.ONE * 2.0 * mm_[o + 5]), origin)
+					sph.visible = true
+					box.visible = false
+					(sph.material_override as StandardMaterial3D).albedo_color = col
 	var cor: PackedFloat32Array = a["coral"]
 	var mm: MultiMesh = e["coral"].multimesh
 	var nc := mm.instance_count

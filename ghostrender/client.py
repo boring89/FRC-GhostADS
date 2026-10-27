@@ -83,6 +83,8 @@ class RenderClient:
         """state: VecSim.render_state() (all envs). cams: [(env, robot, rig_index)].
         post: [(gain, noise, blur_dx_px, blur_dy_px, seed)] per camera. Returns (K,H,W,3) uint8, header."""
         arrays = {k: state[k] for k in ("robots", "coral", "algae", "cages")}
+        if "mech" in state:                              # 254 mechanism geometry (per robot solids), optional
+            arrays["mech"] = state["mech"]
         if markers is not None:
             arrays["markers"] = markers
         meta, blob = protocol.pack_arrays(arrays)

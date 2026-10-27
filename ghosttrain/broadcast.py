@@ -338,6 +338,7 @@ class Broadcast:
                 state = dict(latest["state"])
                 if prev is not None:
                     state["robots"] = prev["state"]["robots"] + alpha * (latest["state"]["robots"] - prev["state"]["robots"])
+                state["mech"] = latest["mech"]
                 if time.time() >= pick["next"]:
                     pick.update(blue=int(self.rng.integers(0, 3)), red=int(self.rng.integers(3, 6)),
                                 next=time.time() + TILE_CHANGE_S)

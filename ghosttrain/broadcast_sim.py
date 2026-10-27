@@ -55,6 +55,7 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
     from ghostrender import dr
     from ghostsim import SimCfg, load
     from ghostsim.robots import ALLIANCE, R
+    from ghostsim.mechanism_state import JointTracker
     from .net import TeacherNet
     from .obs import Encoder
     from .vecenv import _Worker
@@ -90,6 +91,7 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
         conn.send({"kind": "match", "appearance": appearance})
         goal = np.zeros((1, R), int)
         res = {"done": np.array([False])}
+        joints = JointTracker(game.goals, R)                  # 254 mechanism pose for the renderer (not used by training)
         # match clock target: advances by the wall time that passed while watching (never by sim.t itself;
         # that re-counted each tick's overshoot and ran the match ~3x faster than real time)
         t_wall = time.time()
@@ -113,11 +115,13 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
                     stick = np.clip((mu + net.log_std.exp() * torch.randn_like(mu)).numpy().reshape(1, R, 3), -1, 1)
                 res = w.step(stick, goal)
                 o = res["obs"]
+                joints.update(goal[0], sim.gs.hold_coral[0], sim.gs.hold_algae[0], TICK_S)
                 r_sel = int(sel.value)
                 snap = {"t": float(sim.t[0]), "state": sim.render_state(), "score": sim.score[0].copy(),
                         "cats": sim.gs.cat[0].copy(), "goal": goal[0].copy(),
                         "status": [robot_status(sim, r, goal) for r in range(R)],
-                        "pov": pov_data(sim, r_sel), "sel": r_sel, "wall": time.time()}
+                        "pov": pov_data(sim, r_sel), "sel": r_sel, "wall": time.time(),
+                        "mech": joints.slots()}
                 conn.send({"kind": "tick", "snap": snap})
                 if res["done"].any():
                     break
@@ -126,7 +130,12 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
             time.sleep(0.005)
         if stop.is_set():
             break
-        conn.send({"kind": "over", "score": sim.score[0].copy(), "cats": sim.gs.cat[0].copy()})
+        # the worker auto-resets on the final tick: take the score and categories saved before the reset
+        fin = res["final"][0]
+        fin_cat = res["final_cat"][0]
+        if np.isnan(fin).any():
+            fin, fin_cat = sim.score[0].copy(), sim.gs.cat[0].copy()
+        conn.send({"kind": "over", "score": np.asarray(fin, float), "cats": np.asarray(fin_cat, float)})
         t_end = time.time() + RESULT_S                 # the parent shows the result card for this long
         while time.time() < t_end and not stop.is_set():
             time.sleep(0.2)

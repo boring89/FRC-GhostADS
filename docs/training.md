@@ -110,6 +110,18 @@ inference on GPU is slow while Godot renders on the same GPU.
 - teacher4 checkpoints (runs/teacher4/iter_0000{10,20,30}.pt) were trained on the old 26 in robot: not compatible
   with the 254 robot physics; BC and MAPPO must be redone.
 
+## Live view shows the 254 robot (mechanism + animation)
+- `ghostsim/mechanism_state.py`: joint tracker in the broadcast sim process only (not physics, not observations).
+  Elevator / wrist / intake move toward a per-goal target at 254 timing rates (4.4 m/s, 1050 deg/s, 600 deg/s).
+- `ghostsim/mechanism.py`: `slots_for` converts the robot's solids to Godot axes; `ghostrender/godot/main.gd` poses a fixed
+  pool of 32 boxes/spheres per robot every frame. The old team-label/clutter robot is no longer drawn.
+- Not drawn yet: climber claw, the 4-bar intake (single arm now). Robot frame size is fixed at 29.5 in in the drawing.
+- Live fps with the 254 model, training running (nice, 12 sim procs): ~25 fps (was ~26.7 before the mechanism).
+
+## Result card fix
+- The worker auto-resets when a match ends, so the card read 0-0. `_Worker.step` now also returns `final_cat` (category
+  points before the reset) and the broadcast uses `final`/`final_cat`. Verified on a full match: 219-97.
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.
