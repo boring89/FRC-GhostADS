@@ -209,6 +209,9 @@ def main(argv=None) -> int:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if bc:
+            bc.shutdown()                             # closes Godot renderers and the simulation process
     return 0
 
 

@@ -69,11 +69,12 @@ the teacher observation (`others`, now 36 features; opponents get zeros). Weight
 - http://localhost:8777/robot?id=N : one robot POV (640x480) with the AprilTags the detector sees and the robot status
 
 Rendering happens only while a page is open. Default parallel sim processes: 6 (`TrainCfg.n_procs`).
-Measured (clean machine, 12 cores, GTX 1070 shared with nothing else): sim 12 procs 12.4k sps, 6 procs 9.8k sps.
-Live: a policy tick is ~26 ms on one core; the render thread draws at 30 fps and interpolates poses between ticks.
-Broadcast alone: 28.7 fps. With the robot page open: broadcast 22 fps, robot page 11 fps. 30 fps is not reached yet.
-Two pitfalls found: separate Godot clients need separate ports (default port depends on pid); policy inference on
-GPU is slow while Godot renders on the same GPU (inference is on CPU in the broadcast).
+Architecture: the match simulation runs in its own process (`ghosttrain/broadcast_sim.py`, policy on CPU) and sends a
+snapshot per policy tick; the dashboard process renders at 30 fps, interpolating robot poses between ticks, and encodes
+JPEG in a separate thread. Measured on this machine (12 cores, GTX 1070): broadcast 29.9 fps alone and 29.9 fps with
+the robot page open (robot page 14.9 fps). Pitfalls found: a sim thread in the same process starved the renderer
+through the GIL (~29 fps cap); separate Godot clients need separate ports (default port depends on pid); policy
+inference on GPU is slow while Godot renders on the same GPU.
 
 ## Known issues / next steps
 - Sensor KF: estimate error grows to several metres over 20 s while its covariance stays ~0.1 m (overconfident filter).
