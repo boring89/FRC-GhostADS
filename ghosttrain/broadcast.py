@@ -172,7 +172,7 @@ class Broadcast:
     Rendering runs at 30 fps only while a page is open; the simulation process pauses while nobody watches.
     """
 
-    def __init__(self, run: Path, opponent="baseline", seed=0, render_top=TOP, render_pov=(640, 480)):
+    def __init__(self, run: Path, opponent="self", seed=0, render_top=TOP, render_pov=(640, 480)):
         self.run = Path(run)
         self.opponent, self.seed = opponent, seed
         self.top_size, self.pov_size = render_top, render_pov
@@ -263,12 +263,24 @@ class Broadcast:
     def _loop(self):
         import sys
         sys.setswitchinterval(0.0005)
+        # A renderer can die (GPU device lost, observed with the training run on the same GPU). Restart the renderers
+        # and keep going instead of leaving the live view dead until someone notices.
+        restarts = 0
         try:
-            self._run()
-        except Exception as e:                       # keep the dashboard alive, show the reason
-            import traceback
-            self.info = f"broadcast stopped: {e!r}"
-            traceback.print_exc()
+            while not self.stop:
+                try:
+                    self._run()
+                    break
+                except (ConnectionError, RuntimeError, TimeoutError, OSError) as e:
+                    restarts += 1
+                    self.info = f"renderer restarted ({restarts}): {e!r}"
+                    print(self.info, flush=True)
+                    time.sleep(2.0)
+                except Exception as e:                # unexpected: show the reason and stop
+                    import traceback
+                    self.info = f"broadcast stopped: {e!r}"
+                    traceback.print_exc()
+                    break
         finally:
             self.shutdown()
 
@@ -345,7 +357,8 @@ class Broadcast:
                 img_top, _ = rc_top.render(state, [(0, 0, 0)])
                 img_pov, _ = rc_pov.render(state, [(0, pick["blue"], 0), (0, pick["red"], 0)])
                 top = cv2.cvtColor(img_top[0], cv2.COLOR_RGB2BGR)
-                scoreboard(top, latest["score"], self.match_s - latest["t"], f"training step {self.training_step() / 1e6:.1f}M")
+                scoreboard(top, latest["score"], self.match_s - latest["t"], f"training step {self.training_step() / 1e6:.1f}M",
+                          red_name="RED  same net" if self.opponent == "self" else "RED  baseline")
                 canvas[:TOP[1]] = top
                 canvas[TOP[1]:, :640] = tile(cv2.cvtColor(img_pov[0], cv2.COLOR_RGB2BGR),
                                              f"BLUE  robot {pick['blue'] + 1}", BLUE,

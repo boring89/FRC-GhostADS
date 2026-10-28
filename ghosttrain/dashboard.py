@@ -193,7 +193,7 @@ def main(argv=None) -> int:
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8777)
     ap.add_argument("--no-live", action="store_true")
-    ap.add_argument("--opponent", default="baseline", choices=["baseline", "self"])
+    ap.add_argument("--opponent", default="self", choices=["baseline", "self"], help="live red side: self = same net (default), baseline = rule-based")
     a = ap.parse_args(argv)
     run = Path(a.run)
     bc = None if a.no_live else Broadcast(run, a.opponent)

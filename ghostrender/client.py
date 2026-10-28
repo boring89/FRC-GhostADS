@@ -30,20 +30,30 @@ class RenderClient:
     def __init__(self, godot_bin=None, port=None, method="forward_plus", timeout=30.0, log=None):
         self.port = port or int(os.environ.get("GHOST_RENDER_PORT", 47800 + os.getpid() % 1000))
         bin_ = str(godot_bin or os.environ.get("GODOT_BIN", DEFAULT_BIN))
+        # renderer output goes to a file (not a pipe nobody reads: a full pipe would block or lose the crash message)
+        self.log_path = Path(os.environ.get("GHOST_RENDER_LOG", f"/tmp/ghost_render_{self.port}.log"))
+        self._logf = open(self.log_path, "w")
         self.proc = subprocess.Popen([bin_, "--path", str(PROJECT), "--rendering-method", method, "--",
-                                      f"--port={self.port}"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, bufsize=1)
+                                      f"--port={self.port}"], stdout=self._logf, stderr=subprocess.STDOUT)
         t0 = time.time()
-        for line in self.proc.stdout:
-            if log:
-                log.write(line)
-            if line.startswith("GHOST_RENDER_LISTEN"):
-                break
-            if "SCRIPT ERROR" in line or "Parse Error" in line:
-                self.proc.kill()
-                raise RuntimeError("Godot script error: " + line.strip())
-            if time.time() - t0 > timeout:
-                raise TimeoutError("Godot did not start")
+        with open(self.log_path) as rd:
+            while True:                                   # poll the log file until the listen line appears
+                line = rd.readline()
+                if not line:
+                    if self.proc.poll() is not None:
+                        raise RuntimeError(f"Godot exited during start, see {self.log_path}")
+                    if time.time() - t0 > timeout:
+                        self.proc.kill()
+                        raise TimeoutError("Godot did not start")
+                    time.sleep(0.05)
+                    continue
+                if log:
+                    log.write(line)
+                if line.startswith("GHOST_RENDER_LISTEN"):
+                    break
+                if "SCRIPT ERROR" in line or "Parse Error" in line:
+                    self.proc.kill()
+                    raise RuntimeError("Godot script error: " + line.strip())
         self.sock = socket.create_connection(("127.0.0.1", self.port), timeout=timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.frame = 0
