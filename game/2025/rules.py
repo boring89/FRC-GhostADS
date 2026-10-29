@@ -50,6 +50,8 @@ class State:
         self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
         # failed actions (robot.success_p): misses per robot; CORAL that found no free floor slot (left the game)
         self.miss, self.coral_lost = z(n, R), i(n)
+        # pieces scored per robot (statistics): coral [L1, L2, L3, L4], algae [processor, net]
+        self.scored_coral, self.scored_algae = z(n, R, 4), z(n, R, 2)
 
 
 class Game(GameBase):
@@ -245,6 +247,7 @@ class Game(GameBase):
         st.align_stuck[idx], st.align_last[idx], st.align_bad[idx] = 0, 0, False
         st.pair_last[idx] = -1e9
         st.miss[idx], st.coral_lost[idx] = 0, 0
+        st.scored_coral[idx], st.scored_algae[idx] = 0, 0
 
     # ------------------------------------------------------------------ geometry tests
     def _at_faces(self, pos, fwd, hx, fc, fn, half_w, facing):
@@ -401,9 +404,9 @@ class Game(GameBase):
         need = np.take_along_axis(prm.times, goal[..., None], -1)[..., 0]
         va = None if m.get("auto_align", False) else m.get("virtual_align")
         if va:                                       # time of the robot's own drive-to-pose, charged as dwell
-            def align_t(lat_err, gap, ang):
+            def align_t(lat_err, gap, ang):                 # x the robot's own alignment skill (robots/*.json)
                 d = np.hypot(lat_err, np.maximum(gap - va["gap_m"], 0.0))
-                return va["settle_s"] + d / va["speed_mps"] + ang / va["omega_radps"]
+                return (va["settle_s"] + d / va["speed_mps"] + ang / va["omega_radps"]) * prm.align_scale
             for li in range(3):                      # nearest free branch of that level
                 lat_lv = np.where(free[..., li] & okb, np.abs(lat_b), np.inf).min(-1)
                 lat_lv = np.where(np.isfinite(lat_lv), lat_lv, 0.0)
@@ -455,7 +458,7 @@ class Game(GameBase):
                     else:
                         st.hold_algae[e, r] = True
                 elif g == "score_L1" and st.l1[e, a, f] < self.l1_cap:
-                    st.l1[e, a, f] += 1; st.l1_auto[e, a, f] += ph == 0
+                    st.l1[e, a, f] += 1; st.l1_auto[e, a, f] += ph == 0; st.scored_coral[e, r, 0] += 1
                     st.hold_coral[e, r] = False; pts[e, r] += P["coral"]["L1"][ph]; st.cat[e, a, 1] += P["coral"]["L1"][ph]
                 elif g in ("score_L2", "score_L3", "score_L4"):
                     li = int(g[-1]) - 2
@@ -464,14 +467,15 @@ class Game(GameBase):
                     for s in order:
                         if not st.branch[e, a, f, s, li] and not hi_ and okb[e, r, s]:
                             st.branch[e, a, f, s, li] = True; st.branch_auto[e, a, f, s, li] = ph == 0
+                            st.scored_coral[e, r, li + 1] += 1
                             st.hold_coral[e, r] = False; pts[e, r] += P["coral"][g[-2:]][ph]
                             st.cat[e, a, 1] += P["coral"][g[-2:]][ph]
                             break
                 elif g == "processor":
-                    st.processor[e, a] += 1; st.hp_stock[e, 1 - a] += 1
+                    st.processor[e, a] += 1; st.hp_stock[e, 1 - a] += 1; st.scored_algae[e, r, 0] += 1
                     st.hold_algae[e, r] = False; pts[e, r] += P["processor"][ph]; st.cat[e, a, 2] += P["processor"][ph]
                 elif g == "net":
-                    st.net[e, a] += 1; st.hold_algae[e, r] = False; pts[e, r] += P["net"][ph]; st.cat[e, a, 2] += P["net"][ph]
+                    st.net[e, a] += 1; st.scored_algae[e, r, 1] += 1; st.hold_algae[e, r] = False; pts[e, r] += P["net"][ph]; st.cat[e, a, 2] += P["net"][ph]
                 elif g == "climb":
                     cg = cage_sel[e, r]
                     if st.cage_occ[e, cg] < 0:

@@ -142,6 +142,32 @@ Checked against the 2025 manual (Game Rules V11, Game Details V13) and the 2025 
   since the intake fix raised opponent-cage contacts to ~3 per match).
 - All earlier checkpoints (BC and teacher) were trained on the old rules and need retraining.
 
+## Partners and opponents at Championship level (robots/others.json)
+Real data: 2025 FIRST Championship NEWTON + HOPPER qualifications from the public frc-events match pages
+(`tools/champs_data.py fetch` / `summary`; 250 matches, 150 teams; parsed points match the official auto / teleop
+points in 246 of 250 matches). Per alliance: 180 points without fouls (p10 132, p90 231), 29 coral (L4 10.5 of 12),
+net 4.5, processor 1.6, barge 20; robots end deep 48 %, parked 45 %, shallow 0 %, none 6 %. Pieces per team (OPR)
+relative to the 97th-percentile team: p10 0.30, p25 0.45, p50 0.61, p75 0.75, p90 0.85.
+- Before: others were drawn independently and could be faster than our robot (5.0 m/s, 0.7x its mechanism times);
+  baseline robots of the others profile scored about as much as our robot.
+- Now: one quality q ~ U(0, 0.95) per robot and reset; times, alignment skill (`align_scale`, multiplies the
+  drive-to-pose time), effective top speed, capabilities and success_p all follow q (`by_quality`,
+  [value at q=0, value at q=1, gamma]). q = 1 is our robot.
+- Calibrated with `tools/calib_others.py solo`: one robot alone, full match, baseline driver, pieces relative to our
+  robot. q 0.10 / 0.25 / 0.50 / 0.75 / 0.90 -> 0.29 / 0.41 / 0.57 / 0.76 / 0.95 (real 0.30 / 0.45 / 0.61 / 0.75 / 0.85).
+- Full matches (`tools/calib_others.py match`, 96 baseline matches): net 4.5, processor 1.2, barge 19.9, deep 0.45,
+  L4 10.0 per alliance (real 4.5, 1.6, 20, 0.48, 10.5); others' pieces relative to ours p50 0.61 (real 0.61).
+  Absolute coral (15 vs 29) and score (128 vs 180) stay below real: the baseline is a mediocre driver (congestion at
+  the same face / station, slow docking). The calibration is relative on purpose, so a better policy raises every
+  robot together.
+- Baseline strategy closer to the Champs teams: net before processor (`prefer_net`), algae biases 3.0 (floor) /
+  1.5 (reef). Before: processor 9.4 per alliance and our robot spent its time on algae.
+- Baseline bug: driving straight at a reef approach point from beside the reef wedged robots on a reef vertex for
+  the rest of the match. Reef-face targets now go through a point 0.7 m in front of the face first; robot-time
+  stalled for > 2 s fell from 18 % to 9 % (24 matches). Remaining stalls are two robots waiting for the same face or
+  station (no coordination in the baseline).
+- Also fixed: a robot's kinetic friction was computed from a second, independent draw of its static friction.
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.

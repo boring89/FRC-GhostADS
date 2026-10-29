@@ -20,9 +20,10 @@ LV = ("score_L1", "score_L2", "score_L3", "score_L4")
 
 class Baseline:
     def __init__(self, game, park_s: float = 14.0, kp: float = 2.2, accel: float = 3.0,
-                 algae_floor_bias: float = 1.0, algae_reef_bias: float = 1.0):
+                 algae_floor_bias: float = 3.0, algae_reef_bias: float = 1.5, prefer_net: bool = True):
         self.g, self.park_s, self.kp, self.accel = game, park_s, kp, accel
         self.algae_floor_bias, self.algae_reef_bias = algae_floor_bias, algae_reef_bias
+        self.prefer_net = prefer_net        # biases 3.0 / 1.5 + net first: algae per alliance close to the 2025 Champs divisions
         self.gi = {n: i for i, n in enumerate(game.goals)}
         obst = [game.polys.center[i] for i in range(len(game.polys))]
         rad = [1.55, 1.55, 0.75] + [0.45] * 6
@@ -154,13 +155,15 @@ class Baseline:
         # trough (L1) has no branch lateral tolerance: it scores directly, no alignment needed
         need_align = m & ~use & (s_g != gi["score_L1"]) & bool(g.model.get("auto_align", False))
         goal = np.where(need_align, g.gi["align_score"], goal)
-        # holding algae: processor (6 pts, 0.5 s) if the robot can, else net (4 pts, 1.8 s).
+        # holding algae: net (4 pts) if the robot can, else processor (6 pts, but it hands the opponent human player
+        # an algae for their net). 2025 Champs divisions: 4.5 net vs 1.6 processor per alliance and match.
+        # prefer_net=False: processor first (the old behaviour).
         # A robot that holds a coral with a free branch scores the coral first (checked above).
         hold_c = gs.hold_coral & s_ok
         pc, pn = g.proc_c[ALLIANCE], g.proc_n[ALLIANCE]                              # (R,2)
         proc_xy = pc[None] + pn[None] * (hx[..., None] + 0.10)                        # (N,R,2)
         proc_yaw = np.broadcast_to(np.arctan2(-pn[:, 1], -pn[:, 0]), (n, R))
-        m_proc = gs.hold_algae & p.processor & ~hold_c
+        m_proc = gs.hold_algae & p.processor & ~hold_c & ~(p.net & self.prefer_net)
         goal = np.where(m_proc, gi["processor"], goal)
         tgt = np.where(m_proc[..., None], proc_xy, tgt)
         tyaw = np.where(m_proc, proc_yaw, tyaw)
@@ -186,7 +189,25 @@ class Baseline:
         tgt = np.where(park[..., None], park_xy, tgt)
         tyaw = np.where(park, 0.0, tyaw)
         goal = np.where(gs.climbed, 0, goal)
+        tgt = self._reef_waypoint(goal, tgt, pos)
         return goal, tgt, tyaw
+
+    def _reef_waypoint(self, goal, tgt, pos, corridor=0.3, out=0.7, deep=0.6):
+        """Reef-face targets: a robot that is not yet in front of the face (lateral > corridor while closer than `deep`
+        along the face normal) first drives to a point `out` m in front of it. Driving straight at the approach
+        point from the side ran the robot's corners into the reef vertices, where it stayed for the rest of the match."""
+        gi = self.gi
+        on_reef = np.isin(goal, [gi[k] for k in ("score_L1", "score_L2", "score_L3", "score_L4", "algae_reef")])
+        if not on_reef.any():
+            return tgt
+        fc, fn = self.g.reef_fc[ALLIANCE], self.g.reef_n[ALLIANCE]                    # (R,6,2)
+        k = np.argmin(np.linalg.norm(tgt[:, :, None] - fc[None], axis=-1), -1)        # face of the target
+        n = fn[np.arange(len(ALLIANCE))[None], k]                                       # (N,R,2)
+        rel = pos - tgt
+        along = (rel * n).sum(-1)
+        lat = np.abs(rel[..., 0] * -n[..., 1] + rel[..., 1] * n[..., 0])
+        side = on_reef & (lat > corridor) & (along < deep)
+        return np.where(side[..., None], tgt + n * out, tgt)
 
     def _climb_target(self, sim, pos, hx):
         """Free own cage that the robot's climb capability can use (rules: deep needs climb 2, shallow needs climb 1).

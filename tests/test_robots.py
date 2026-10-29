@@ -57,3 +57,20 @@ def test_elevator_robot_cannot_climb_but_uses_processor():
     assert not sim.gs.hold_algae[0, 0]                                # processor scored (algae released)
     assert sim.gs.processor[0, 0] == 1
     assert sim.prm.climb[0, 0] == 2 and not sim.gs.climbed[0, 0]      # deep climb capable (254), not climbing here
+
+def test_others_quality_makes_strong_robots_strong_in_every_respect():
+    """robots/others.json: one quality q per robot drives mechanism time, alignment, speed, capabilities and success
+    together (2025 Champs pool); q never exceeds our robot (FRC 254 numbers)."""
+    p = sample_params([load_profile("others.json")] * 6, 400, GOALS, np.random.default_rng(3))
+    ours = sample_params([load_profile("ours.json")] * 6, 1, GOALS, np.random.default_rng(3), randomize=False)
+    q = p.quality.reshape(-1)
+    assert 0.0 <= q.min() and q.max() <= 0.95
+    t_l4 = p.times[..., GOALS.index("score_L4")].reshape(-1)
+    for v, sign in ((t_l4, -1), (p.align_scale.reshape(-1), -1), (p.max_v.reshape(-1), 1),
+                    (p.succ[..., GOALS.index("score_L4")].reshape(-1), 1)):
+        assert sign * np.corrcoef(q, v)[0, 1] > 0.8
+    assert t_l4.min() >= ours.times[0, 0, GOALS.index("score_L4")] - 1e-9                 # nobody faster than 254
+    assert (p.align_scale >= 1.0).all()
+    hi, lo = q > 0.7, q < 0.3
+    assert p.levels[..., 3].reshape(-1)[hi].mean() > p.levels[..., 3].reshape(-1)[lo].mean()
+    assert (p.climb == 1).mean() < 0.05 and 0.55 < (p.climb == 2).mean() < 0.85             # deep cages at Champs

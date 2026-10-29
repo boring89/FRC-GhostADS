@@ -1,95 +1,154 @@
 {
  "name": "others",
  "base": "ours.json",
- "_note": "Partners/opponents: same design family with wider ranges and per-robot capabilities (MODEL choices). Frame up to 30 in (legal perimeter 120 in).",
+ "_note": "Partners/opponents: 2025 FIRST Championship division level (MODEL, calibrated in docs/training.md against NEWTON + HOPPER qualification breakdowns). One quality q per robot and reset; q = 1 is about our robot (FRC 254 numbers).",
+ "quality": [
+  0.0,
+  0.95
+ ],
+ "by_quality": {
+  "_note": "[value at q=0, value at q=1(, gamma)]: v1 + (v0 - v1) * (1 - q)**gamma. Calibrated (tools/calib_others.py solo) so that pieces per match relative to our robot follow the 2025 Champs NEWTON + HOPPER teams relative to the 97th-percentile team: p10 0.30, p25 0.45, p50 0.61, p75 0.75, p90 0.85.",
+  "times_scale": [
+   5.0,
+   1.0,
+   1.1
+  ],
+  "align_scale": [
+   7.0,
+   1.0,
+   1.1
+  ],
+  "control.max_speed_mps": [
+   2.6,
+   4.2,
+   1.1
+  ],
+  "capability_p": {
+   "station": [
+    0.95,
+    1.0
+   ],
+   "floor_coral": [
+    0.2,
+    0.8
+   ],
+   "floor_algae": [
+    0.3,
+    0.8
+   ],
+   "algae_reef": [
+    0.6,
+    0.95
+   ],
+   "L1": [
+    0.9,
+    1.0
+   ],
+   "L2": [
+    0.8,
+    1.0
+   ],
+   "L3": [
+    0.8,
+    1.0
+   ],
+   "L4": [
+    0.7,
+    1.0
+   ],
+   "processor": [
+    0.5,
+    0.9
+   ],
+   "net": [
+    0.3,
+    0.9
+   ],
+   "climb_deep": [
+    0.5,
+    0.95
+   ],
+   "climb_shallow": [
+    0.05,
+    0.0
+   ]
+  },
+  "success_p": {
+   "coral_station": [
+    0.8,
+    0.98,
+    1.1
+   ],
+   "algae_reef": [
+    0.8,
+    0.97,
+    1.1
+   ],
+   "score_L1": [
+    0.9,
+    0.99,
+    1.1
+   ],
+   "score_L2": [
+    0.75,
+    0.98,
+    1.1
+   ],
+   "score_L3": [
+    0.7,
+    0.97,
+    1.1
+   ],
+   "score_L4": [
+    0.6,
+    0.96,
+    1.1
+   ],
+   "processor": [
+    0.85,
+    0.99,
+    1.1
+   ],
+   "net": [
+    0.5,
+    0.92,
+    1.1
+   ],
+   "climb": [
+    0.7,
+    0.95,
+    1.1
+   ]
+  }
+ },
  "uniform": {
   "frame_in": [
-   24.0,
+   25.0,
    30.0
   ],
   "mass_kg": [
-   48.0,
-   67.0
+   50.0,
+   66.0
   ],
   "height_m": [
-   0.6,
+   0.8,
    1.1
   ],
   "drive.free_speed_mps": [
    3.8,
-   5.4
+   5.0
   ],
   "drive.mu_static": [
-   0.9,
+   0.95,
    1.2
   ],
   "drive.current_limit_A": [
-   50.0,
+   60.0,
    100.0
-  ],
-  "control.max_speed_mps": [
-   3.5,
-   5.0
   ],
   "control.max_omega_radps": [
    5.0,
    10.0
-  ]
- },
- "times_scale": [
-  0.7,
-  2.0
- ],
- "capability_p": {
-  "station": 0.9,
-  "floor_coral": 0.5,
-  "floor_algae": 0.6,
-  "algae_reef": 0.8,
-  "L1": 0.9,
-  "L2": 0.85,
-  "L3": 0.8,
-  "L4": 0.6,
-  "processor": 0.8,
-  "net": 0.4,
-  "climb_deep": 0.4,
-  "climb_shallow": 0.2
- },
- "success_p": {
-  "coral_station": [
-   0.93,
-   0.99
-  ],
-  "algae_reef": [
-   0.9,
-   0.99
-  ],
-  "score_L1": [
-   0.95,
-   1.0
-  ],
-  "score_L2": [
-   0.9,
-   0.99
-  ],
-  "score_L3": [
-   0.9,
-   0.99
-  ],
-  "score_L4": [
-   0.85,
-   0.98
-  ],
-  "processor": [
-   0.95,
-   1.0
-  ],
-  "net": [
-   0.75,
-   0.95
-  ],
-  "climb": [
-   0.8,
-   0.98
   ]
  }
 }
