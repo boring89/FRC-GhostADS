@@ -48,6 +48,8 @@ class State:
         self.align_stuck, self.align_last = z(n, R), z(n, R, 2)
         self.align_bad = b(n, R, 12)              # candidates given up after being stuck (re-chosen next)
         self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
+        # failed actions (robot.success_p): misses per robot; CORAL that found no free floor slot (left the game)
+        self.miss, self.coral_lost = z(n, R), i(n)
 
 
 class Game(GameBase):
@@ -127,6 +129,9 @@ class Game(GameBase):
         blk = m["algae_blocks"]
         self.block = {k: np.array([f"L{l}" in blk[k] for l in (2, 3, 4)]) for k in ("low", "high")}
         self.l1_cap = m["l1_capacity_per_face"]
+        ts = f["reef"]["trough_slots"]
+        assert self.l1_cap <= ts["per_layer"] * len(ts["z"]), "l1_capacity_per_face exceeds the trough slots"
+        self.stop_ids = np.array([self.gi[g] for g in m.get("stop_goals", [])], np.int64)
         pc = cfg["pieces"]
         self.kc, self.ka = pc["coral"]["floor_slots"], pc["algae"]["floor_slots"]
         self.coral_count = pc["coral"]["count"]
@@ -149,15 +154,17 @@ class Game(GameBase):
                         else:
                             xy = xy + n * 0.06
                             br.append([*xy, rf["branch_top"][lv] * IN - 0.06, yaw, np.radians(rf["branch_angle_deg"][lv])])
+                ts = rf["trough_slots"]                                  # layer by layer, end to end along the face
                 for j in range(self.l1_cap):
-                    xy = fc + n * 0.08 + t * (j - (self.l1_cap - 1) / 2) * 0.16
-                    l1.append([*xy, rf["trough_height"] * IN + 0.06, yaw + np.pi / 2, 0.0])
+                    layer, i = divmod(j, ts["per_layer"])
+                    xy = fc + n * ts["outward"][layer] * IN + t * (i - (ts["per_layer"] - 1) / 2) * ts["lateral_spacing"] * IN
+                    l1.append([*xy, ts["z"][layer] * IN, yaw + np.pi / 2, 0.0])
         self.branch_pose = np.array(br).reshape(2, 6, 2, 3, 5)
         self.l1_pose = np.array(l1).reshape(2, 6, self.l1_cap, 5)
-        top = rf["branch_top"]
-        z = {"low": (top["L2"] + top["L3"]) / 2 * IN, "high": (top["L3"] + top["L4"]) / 2 * IN}
-        self.reef_algae_pose = np.array([[[*(self.reef_fc[a, k] - self.reef_n[a, k] * 0.05),
-                                           z["high" if self.algae_high[k] else "low"]] for k in range(6)] for a in range(2)])
+        ar = rf["algae_rest"]                                            # cradled by the L2 / L3 branch pair
+        self.reef_algae_pose = np.array([[[*(self.reef_fc[a, k] + self.reef_n[a, k] * ar["outward"] * IN),
+                                           ar["z"]["high" if self.algae_high[k] else "low"] * IN] for k in range(6)]
+                                         for a in range(2)])
 
     def new_state(self, n):
         return State(n, self.kc, self.ka)
@@ -237,10 +244,12 @@ class Game(GameBase):
         st.align_t[idx], st.aligned[idx], st.align_tgt[idx] = 0, False, 0
         st.align_stuck[idx], st.align_last[idx], st.align_bad[idx] = 0, 0, False
         st.pair_last[idx] = -1e9
+        st.miss[idx], st.coral_lost[idx] = 0, 0
 
     # ------------------------------------------------------------------ geometry tests
     def _at_faces(self, pos, fwd, hx, fc, fn, half_w, facing):
-        """pos/fwd (N,R,2), fc/fn (R,F,2) -> face index (N,R) (-1 none), lateral offset (N,R)."""
+        """pos/fwd (N,R,2), fc/fn (R,F,2) -> face index (N,R) (-1 none), and for that face: lateral offset, gap
+        (bumper to face) and heading error [rad], each (N,R)."""
         m = self.model
         rel = pos[:, :, None] - fc[None]
         gap = (rel * fn).sum(-1) - hx[..., None]
@@ -250,15 +259,19 @@ class Game(GameBase):
         ok = (gap > -0.05) & (gap <= m["approach_m"]) & (np.abs(lat) <= half_w) & (head >= np.cos(np.radians(m["heading_tol_deg"])))
         score = np.where(ok, np.abs(lat), np.inf)
         f = np.argmin(score, -1)
-        return np.where(ok.any(-1), f, -1), np.take_along_axis(lat, f[..., None], -1)[..., 0]
+        pick = lambda x: np.take_along_axis(x, f[..., None], -1)[..., 0]
+        return np.where(ok.any(-1), f, -1), pick(lat), pick(gap), np.arccos(np.clip(pick(head), -1.0, 1.0))
 
-    def _in_intake(self, pp, body, prm):
+    def _in_intake(self, pp, body, prm, radius):
+        """Pieces (N,K,2) of the given radius inside each robot's front intake (N,R,K). The reach is measured to the
+        near edge of the piece: a piece resting against the bumper is inside."""
         d = pp[:, None] - body.pose[:, :, None, :2]
         th = body.pose[..., 2][..., None]
         lx = d[..., 0] * np.cos(th) + d[..., 1] * np.sin(th)
         ly = -d[..., 0] * np.sin(th) + d[..., 1] * np.cos(th)
         hx = prm.half[..., 0][..., None]
-        return (lx >= hx - 0.15) & (lx <= hx + prm.intake_depth[..., None]) & (np.abs(ly) <= prm.intake_half_width[..., None])
+        return (lx >= hx - 0.15) & (lx <= hx + prm.intake_depth[..., None] + radius) & \
+            (np.abs(ly) <= prm.intake_half_width[..., None])
 
     def _spawn_algae(self, st, e, xy, vel):
         """Put one algae on the floor in env e (first free slot)."""
@@ -266,6 +279,25 @@ class Game(GameBase):
         if len(free):
             k = free[0]
             st.algae.pos[e, k], st.algae.vel[e, k], st.algae.active[e, k], st.stacked[e, k] = xy, vel, True, -1
+
+    def _spawn_coral(self, st, e, xy, vel, yaw):
+        """Put one coral on the floor in env e (first free slot that no algae rests on). No free slot: the coral
+        leaves the game (counted in st.coral_lost)."""
+        on = np.zeros(self.kc, bool)
+        on[st.stacked[e][st.stacked[e] >= 0]] = True
+        free = np.flatnonzero(~st.coral.active[e] & ~on)
+        if len(free):
+            k = free[0]
+            st.coral.pos[e, k], st.coral.vel[e, k], st.coral.yaw[e, k], st.coral.active[e, k] = xy, vel, yaw, True
+        else:
+            st.coral_lost[e] += 1
+
+    def _beside(self, body, prm, e, r, radius, rng):
+        """Floor point just left or right of robot r (a missed piece falls next to it) and a small velocity."""
+        th = body.pose[e, r, 2]
+        side = np.array([-np.sin(th), np.cos(th)]) * rng.choice([-1.0, 1.0])
+        xy = body.pose[e, r, :2] + side * (prm.half[e, r, 1] + radius + self.model["miss_spawn_gap_m"])
+        return xy, side * rng.uniform(0.1, 0.4) + body.vel[e, r, :2]
 
     # ------------------------------------------------------------------ step
     def substep(self, st, body, prm, goal, t, live, dt, rng):
@@ -298,17 +330,33 @@ class Game(GameBase):
                    body, prm.half, self, dt)
         st.algae.active = act
 
+        # ---- floor intakes: a piece inside the intake of a robot that is intaking it moves with that robot (the
+        # rollers hold it) instead of bouncing off the bumper, so the dwell timer can complete on the move
+        in_c = self._in_intake(st.coral.pos, body, prm, self.rad["coral"])
+        under = np.zeros(st.coral.active.shape, bool)
+        ue, uk = np.nonzero(st.stacked >= 0)
+        under[ue, st.stacked[ue, uk]] = True
+        cfloor = in_c & (st.coral.active & ~under)[:, None]
+        afloor = self._in_intake(st.algae.pos, body, prm, self.rad["algae"]) & st.algae.active[:, None]
+        for pcs, inside, grab in ((st.coral, cfloor, (goal == gi["coral_floor"]) & ~st.hold_coral & prm.floor_coral),
+                                  (st.algae, afloor & (st.stacked < 0)[:, None], (goal == gi["algae_floor"]) & ~st.hold_algae & prm.floor_algae)):
+            e_, r_, k_ = np.nonzero(inside & grab[..., None])
+            if len(e_):
+                rel = pcs.pos[e_, k_] - body.pose[e_, r_, :2]
+                w = body.vel[e_, r_, 2]
+                pcs.vel[e_, k_] = body.vel[e_, r_, :2] + np.stack([-w * rel[:, 1], w * rel[:, 0]], -1)
+
         # ---- mechanism predicates
         goal = np.where(st.climbed, gi["idle"], goal)
         al = ALLIANCE[None, :].repeat(n, 0)
-        face, lat = self._at_faces(pos, fwd, hx, self.reef_fc[ALLIANCE], self.reef_n[ALLIANCE],
-                                   m["lateral_tol_m"], np.ones((n, R)))
+        face, lat, gap_r, ang_r = self._at_faces(pos, fwd, hx, self.reef_fc[ALLIANCE], self.reef_n[ALLIANCE],
+                                                 m["lateral_tol_m"], np.ones((n, R)))
         f0 = np.maximum(face, 0)
         at_reef = face >= 0
-        sta, _ = self._at_faces(pos, fwd, hx, self.station_c[ALLIANCE], self.station_n[ALLIANCE],
-                                self.station_half, prm.station_side)
-        prc, _ = self._at_faces(pos, fwd, hx, self.proc_c[ALLIANCE][:, None], self.proc_n[ALLIANCE][:, None],
-                                self.proc_half + 0.1, np.ones((n, R)))
+        sta, _, gap_s, ang_s = self._at_faces(pos, fwd, hx, self.station_c[ALLIANCE], self.station_n[ALLIANCE],
+                                              self.station_half, prm.station_side)
+        prc, lat_p, gap_p, ang_p = self._at_faces(pos, fwd, hx, self.proc_c[ALLIANCE][:, None], self.proc_n[ALLIANCE][:, None],
+                                                  self.proc_half + 0.1, np.ones((n, R)))
         dxm = np.abs(pos[..., 0] - self.mid[0])
         ny = self.net_y[ALLIANCE]
         net_ok = (dxm >= m["net_zone_dx_m"][0]) & (dxm <= m["net_zone_dx_m"][1]) & \
@@ -319,12 +367,6 @@ class Game(GameBase):
         deep = st.cage_deep[env[:, None, None], own_cages[None]]
         cage_ok &= np.where(deep, prm.climb[..., None] == 2, prm.climb[..., None] == 1)
         cage_sel = own_cages[None].repeat(n, 0)[env[:, None], np.arange(R)[None], np.argmax(cage_ok, -1)]
-        in_c = self._in_intake(st.coral.pos, body, prm)
-        under = np.zeros(st.coral.active.shape, bool)
-        ue, uk = np.nonzero(st.stacked >= 0)
-        under[ue, st.stacked[ue, uk]] = True
-        cfloor = in_c & (st.coral.active & ~under)[:, None]
-        afloor = self._in_intake(st.algae.pos, body, prm) & st.algae.active[:, None]
         ralg = st.reef_algae[env[:, None], al, f0]
         hi = self.algae_high[f0]
         blocked = ralg[..., None] & np.where(hi[..., None], self.block["high"], self.block["low"])     # (N,R,3)
@@ -349,20 +391,53 @@ class Game(GameBase):
         c |= sel("net") & st.hold_algae & prm.net & net_ok
         c |= sel("climb") & ~auto[:, None] & (prm.climb > 0) & cage_ok.any(-1)
         c &= live[:, None] & ~st.climbed
+        # placing / receiving a piece needs the robot (nearly) stopped
+        slow = (np.linalg.norm(body.vel[..., :2], axis=-1) <= m.get("stop_speed_mps", np.inf)) & \
+            (np.abs(body.vel[..., 2]) <= m.get("stop_omega_radps", np.inf))
+        c &= slow | ~np.isin(goal, self.stop_ids)
         st.timer = np.where(goal != st.timer_goal, 0.0, st.timer)
         st.timer_goal = goal
         st.timer = np.where(c, st.timer + dt, 0.0)
         need = np.take_along_axis(prm.times, goal[..., None], -1)[..., 0]
+        va = None if m.get("auto_align", False) else m.get("virtual_align")
+        if va:                                       # time of the robot's own drive-to-pose, charged as dwell
+            def align_t(lat_err, gap, ang):
+                d = np.hypot(lat_err, np.maximum(gap - va["gap_m"], 0.0))
+                return va["settle_s"] + d / va["speed_mps"] + ang / va["omega_radps"]
+            for li in range(3):                      # nearest free branch of that level
+                lat_lv = np.where(free[..., li] & okb, np.abs(lat_b), np.inf).min(-1)
+                lat_lv = np.where(np.isfinite(lat_lv), lat_lv, 0.0)
+                need = np.where(sel(f"score_L{li + 2}"), need + align_t(lat_lv, gap_r, ang_r), need)
+            need = np.where(sel("score_L1"), need + align_t(0.0, gap_r, ang_r), need)
+            need = np.where(sel("algae_reef"), need + align_t(np.abs(lat), gap_r, ang_r), need)
+            need = np.where(sel("coral_station"), need + align_t(0.0, gap_s, ang_s), need)
+            need = np.where(sel("processor"), need + align_t(np.abs(lat_p), gap_p, ang_p), need)
         fire = c & (st.timer >= need)
         st.timer[fire] = 0.0
 
         # ---- effects, robot by robot (shared resources)
         P = self.points
+        rc, ra = self.rad["coral"], self.rad["algae"]
         for r in np.flatnonzero(fire.any(0)):
             a = ALLIANCE[r]
             for e in np.flatnonzero(fire[:, r]):
                 g, ph = self.goals[goal[e, r]], 0 if auto[e] else 1
                 f = f0[e, r]
+                if rng.random() >= prm.succ[e, r, goal[e, r]]:              # missed: the piece falls next to the robot
+                    st.miss[e, r] += 1
+                    if g == "coral_station" and st.stock[e, a] > 0:
+                        st.stock[e, a] -= 1
+                        self._spawn_coral(st, e, *self._beside(body, prm, e, r, rc, rng), rng.uniform(-np.pi, np.pi))
+                    elif g in ("score_L1", "score_L2", "score_L3", "score_L4"):
+                        st.hold_coral[e, r] = False
+                        self._spawn_coral(st, e, *self._beside(body, prm, e, r, rc, rng), rng.uniform(-np.pi, np.pi))
+                    elif g == "algae_reef" and st.reef_algae[e, a, f]:
+                        st.reef_algae[e, a, f] = False
+                        self._spawn_algae(st, e, *self._beside(body, prm, e, r, ra, rng))
+                    elif g in ("processor", "net"):
+                        st.hold_algae[e, r] = False
+                        self._spawn_algae(st, e, *self._beside(body, prm, e, r, ra, rng))
+                    continue                                                 # climb: not hanging, may retry
                 if g == "coral_station" and st.stock[e, a] > 0:
                     st.stock[e, a] -= 1; st.hold_coral[e, r] = True
                 elif g == "coral_floor":

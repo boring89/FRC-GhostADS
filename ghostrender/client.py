@@ -79,7 +79,8 @@ class RenderClient:
             "type": "configure", "version": protocol.VERSION, "n_envs": n_envs, "width": width, "height": height,
             "max_cams": max_cams, "scene": game.scene(cad=use_cad), "rigs": self.rigs, "tag_bits": bits,
             "visual_glb": str(glb) if use_cad else "", "msaa": int(msaa),
-            "pieces": {"mc": 126, "ma": 36, "coral_od": pc["coral"]["od"] * IN, "coral_len": pc["coral"]["length"] * IN,
+            "pieces": {"mc": game.kc + 6 + game.branch_pose[..., 0].size + game.l1_pose[..., 0].size,   # floor, held, branches, trough
+                       "ma": game.ka + 6 + game.reef_algae_pose[..., 0].size, "coral_od": pc["coral"]["od"] * IN, "coral_len": pc["coral"]["length"] * IN,
                        "algae_d": pc["algae"]["diameter"] * IN, "cage_size": f["cages"]["size"] * IN,
                        "cage_h": f["cages"]["height"] * IN}})
         assert h["type"] == "ok"

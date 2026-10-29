@@ -42,7 +42,7 @@ def test_observation_and_render_shapes():
     pv = sim.privileged()
     assert pv["pose"].shape == (2, 6, 3) and pv["branch"].shape == (2, 2, 6, 2, 3)
     rs = sim.render_state()
-    assert rs["robots"].shape == (2, 6, 4) and rs["coral"].shape == (2, 126, 6)
+    assert rs["robots"].shape == (2, 6, 4) and rs["coral"].shape == (2, 12 + 6 + 72 + 12 * sim.game.l1_cap, 6)   # floor, held, branches, trough
     assert rs["algae"].shape == (2, 36, 4) and rs["cages"].shape == (2, 6, 4)
     assert all(v.dtype == np.float32 for v in rs.values())
     assert rs["coral"][..., 5].sum() == 2 * 6                    # coral on marks visible

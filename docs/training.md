@@ -122,6 +122,26 @@ inference on GPU is slow while Godot renders on the same GPU.
 - The worker auto-resets when a match ends, so the card read 0-0. `_Worker.step` now also returns `final_cat` (category
   points before the reset) and the broadcast uses `final`/`final_cat`. Verified on a full match: 219-97.
 
+## Simulator realism pass (world-championship level)
+Checked against the 2025 manual (Game Rules V11, Game Details V13) and the 2025 Einstein finals (281-295 points).
+- Floor ALGAE could never be picked up: the bumper pushed the ball (r 0.206 m) out of the 0.15 m intake. The intake
+  reach is now measured to the near edge of the piece, and a piece inside the intake of a robot that is intaking it
+  moves with the robot (rollers hold it). The baseline used to lose time chasing balls it could not take:
+  baseline vs baseline (24 matches, auto start) 145 -> 238 points per alliance with this fix alone, floor-algae pickups
+  0.6 -> 14 per match.
+- Placing / receiving pieces needs the robot stopped (`model.stop_goals`, 0.3 m/s, 1 rad/s); before, L4 scored while
+  driving past the reef at 0.85 m/s. Floor intakes and climbing still work on the move.
+- auto_align off: the robot's own drive-to-pose time is charged as dwell (`model.virtual_align`: 0.15 s +
+  distance / 1.0 m/s + heading / 3 rad/s; lateral distance to the nearest free branch of the level).
+- Actions can fail (`robots/*.json success_p`, ESTIMATES: 254 L4 0.96, others L4 0.85-0.98, ...). A miss drops the piece
+  on the floor next to the robot (coral that finds no free floor slot is counted in `coral_lost`).
+- Together (baseline vs baseline): coral per alliance 26.9 -> 23.1, ~6 misses per match, total 229 per alliance.
+- L1 trough holds 6 per face (2 layers of 3, manual 6.5.1 sets no count limit); render poses for trough coral and
+  staged reef algae now follow the CAD (they floated in front of the reef / intersected the L4 branches).
+- Baseline: also skips floor algae that lie inside an opponent-cage keep-out disc (more chasing near the barge
+  since the intake fix raised opponent-cage contacts to ~3 per match).
+- All earlier checkpoints (BC and teacher) were trained on the old rules and need retraining.
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.

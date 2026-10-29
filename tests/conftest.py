@@ -13,8 +13,9 @@ _BLUE = np.array([[2.5, 1.0], [2.5, 7.05], [6.5, 7.0]])
 PARK = np.concatenate([_BLUE, [_L, _W] - _BLUE])
 
 
-def make_sim(n=1, sensors=False, seed=0, full=True, **kw):
-    """full=True: every robot can do everything (rules tests). full=False: the actual design spec."""
+def make_sim(n=1, sensors=False, seed=0, full=True, perfect=True, **kw):
+    """full=True: every robot can do everything (rules tests). full=False: the actual design spec.
+    perfect=True: every action succeeds (success_p = 1), so scenario tests are deterministic."""
     kw = {"randomize": False, "start_mode": "teleop", **kw}          # scenario tests: teleop unless asked otherwise
     sim = VecSim(SimCfg(n_envs=n, seed=seed, sensors=sensors, slots=("ours",) * 6, **kw))
     if full:
@@ -22,6 +23,8 @@ def make_sim(n=1, sensors=False, seed=0, full=True, **kw):
         p.processor[:], p.algae_reef[:], p.climb[:] = True, True, 2
         sim.gs.cage_deep[:] = True
         p.times[:] = np.minimum(p.times, 1.0)
+    if perfect:
+        sim.prm.succ[:] = 1.0
     park(sim)
     return sim
 

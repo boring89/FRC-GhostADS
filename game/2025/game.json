@@ -69,6 +69,27 @@
     "L2": 35.0,
     "L3": 35.0,
     "L4": 90.0
+   },
+   "algae_rest": {
+    "_note": "MEASURED from the official CAD (tools/check_field.py): staged ALGAE cradled by the L2 (low) or L3 (high) branch pair, against the two pipes. outward = along the face normal from the reef tag plane.",
+    "outward": -5.7,
+    "z": {
+     "low": 36.3,
+     "high": 52.1
+    }
+   },
+   "trough_slots": {
+    "_note": "MEASURED from the official CAD: CORAL lie end to end along the face in the trough channel (3 per layer); a 2nd layer rests on the 1st, a 3rd would hit the L2 branches. outward = along the face normal from the reef tag plane.",
+    "per_layer": 3,
+    "lateral_spacing": 12.2,
+    "outward": [
+     -4.7,
+     -5.9
+    ],
+    "z": [
+     18.8,
+     23.0
+    ]
    }
   },
   "starting_line_x_blue": 297.49,
@@ -216,7 +237,7 @@
     "L3"
    ]
   },
-  "l1_capacity_per_face": 3,
+  "l1_capacity_per_face": 6,
   "approach_m": 0.3,
   "lateral_tol_m": 0.4,
   "heading_tol_deg": 25.0,
@@ -253,6 +274,28 @@
   "align_tol_m": 0.05,
   "align_tol_deg": 5.0,
   "align_gap_m": 0.1,
-  "auto_align": false
+  "auto_align": false,
+  "_l1_capacity_per_face": "Manual 6.5.1: a CORAL counts in the trough if it touches the trough or rests on CORAL that does (no count limit). 2 layers x 3 fit the CAD trough (field.reef.trough_slots).",
+  "stop_goals": [
+   "coral_station",
+   "algae_reef",
+   "score_L1",
+   "score_L2",
+   "score_L3",
+   "score_L4",
+   "processor",
+   "net"
+  ],
+  "stop_speed_mps": 0.3,
+  "stop_omega_radps": 1.0,
+  "_stop": "Placing / receiving pieces needs the robot (nearly) stopped: the dwell timer of stop_goals only runs below these speeds. Floor intakes and climbing work on the move.",
+  "virtual_align": {
+   "settle_s": 0.15,
+   "speed_mps": 1.0,
+   "omega_radps": 3.0,
+   "gap_m": 0.03
+  },
+  "_virtual_align": "auto_align off: the robot's own drive-to-pose is not simulated; its time is added to the dwell instead: settle + distance(lateral to the target, gap beyond gap_m) / speed + heading error / omega. World-championship level estimates.",
+  "miss_spawn_gap_m": 0.05
  }
 }

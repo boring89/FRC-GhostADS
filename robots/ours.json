@@ -73,7 +73,19 @@
     0.0,
     0.6
    ]
-  }
+  },
+  "success_p": {
+   "coral_station": 0.98,
+   "algae_reef": 0.97,
+   "score_L1": 0.99,
+   "score_L2": 0.98,
+   "score_L3": 0.97,
+   "score_L4": 0.96,
+   "processor": 0.99,
+   "net": 0.92,
+   "climb": 0.95
+  },
+  "_success_p": "Probability that an action succeeds when its dwell completes (missing goals: 1.0). On a miss the piece lands on the floor next to the robot. World-championship level ESTIMATES, not measured."
  },
  "randomize": {
   "_note": "per-reset ranges. frame 25-27 in per spec; the rest are MODEL choices.",

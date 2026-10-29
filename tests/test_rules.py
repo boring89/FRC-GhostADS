@@ -53,10 +53,10 @@ def test_l1_capacity_and_both_branches(sim):
     at_face(sim, 0, 0, 3)                                                 # trough: whole face, no lateral test
     st, gl = idle(sim)
     gl[:, 0] = gid(sim, "score_L1")
-    for _ in range(5):
+    for _ in range(sim.game.l1_cap + 2):                                   # stacks up to the capacity (2 layers)
         sim.gs.hold_coral[:, 0] = True
         run(sim, st, gl, 8)
-    assert sim.gs.l1[0, 0, 3] == sim.game.l1_cap
+    assert sim.gs.l1[0, 0, 3] == sim.game.l1_cap == 6
     gl[:, 0] = gid(sim, "score_L4")
     for side in (-1, 1):                                                   # one L4 branch on each side of the face
         at_branch(sim, 0, 0, 3, side=side)
@@ -192,7 +192,7 @@ def test_pieces_conserved_random_rollout():
             st, gl = rng.uniform(-1, 1, (6, 6, 3)), rng.integers(0, len(sim.game.goals), (6, 6))
         sim.step(st, gl)
     gs = sim.gs
-    coral = gs.stock.sum(1) + gs.coral.active.sum(1) + gs.hold_coral.sum(1) + gs.branch.sum((1, 2, 3, 4)) + gs.l1.sum((1, 2))
+    coral = gs.stock.sum(1) + gs.coral.active.sum(1) + gs.hold_coral.sum(1) + gs.branch.sum((1, 2, 3, 4)) + gs.l1.sum((1, 2)) + gs.coral_lost
     algae = gs.reef_algae.sum((1, 2)) + gs.algae.active.sum(1) + gs.hold_algae.sum(1) + gs.hp_stock.sum(1) + gs.net.sum(1)
     assert (coral == 126).all() and (algae == 18).all()
 

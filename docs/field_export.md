@@ -6,7 +6,10 @@
   reef hexagon from the reef tags; zones, cages, coral marks, starting line from game.json.
 - AndyMark fields: `SimCfg(tags="andymark")` swaps the tag file (Team Update 12).
 - Values measured from the official CAD (see `tools/check_field.py`): barge centre support 12 x 12 in,
-  guardrail inner faces 2.7 cm inside the 317 in width, cage layout (middle cage shallow, outer two deep).
+  guardrail inner faces 2.7 cm inside the 317 in width, cage layout (middle cage shallow, outer two deep),
+  staged reef ALGAE rest pose (`field.reef.algae_rest`: cradled by the L2 / L3 branch pair, 5.7 in behind the tag
+  plane, centre 36.3 / 52.1 in high; checked: < 1 cm from the CAD cradle, no penetration) and the trough slots for
+  L1 CORAL (`field.reef.trough_slots`: 3 end to end per layer, 2 layers; a 3rd layer would hit the L2 branches).
 
 ## Visual geometry (renderer)
 `ghostrender` uses the optimised CAD model when `game/2025/visual/field.glb` exists, otherwise the

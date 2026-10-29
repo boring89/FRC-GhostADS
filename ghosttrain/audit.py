@@ -74,7 +74,7 @@ class Auditor:
             exp = state_points(g, gs) + gs.fouls[:, ::-1]
             for e in np.flatnonzero(ok & (np.abs(gs.score - exp) > 1e-6).any(-1)):
                 self.flags["score_mismatch"].add((int(e), f"score {gs.score[e]} expected {exp[e]}"))
-        coral = gs.stock.sum(1) + gs.coral.active.sum(1) + gs.hold_coral.sum(1) + gs.branch.sum((1, 2, 3, 4)) + gs.l1.sum((1, 2))
+        coral = gs.stock.sum(1) + gs.coral.active.sum(1) + gs.hold_coral.sum(1) + gs.branch.sum((1, 2, 3, 4)) + gs.l1.sum((1, 2)) + gs.coral_lost
         alg = gs.reef_algae.sum((1, 2)) + gs.algae.active.sum(1) + gs.hold_algae.sum(1) + gs.hp_stock.sum(1) + gs.net.sum(1)
         for e in np.flatnonzero((coral != g.coral_count) | (alg != 18)):
             self.flags["conservation"].add((int(e), f"coral {coral[e]} algae {alg[e]}"))

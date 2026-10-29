@@ -39,7 +39,7 @@ class RobotParams:
     max_v: np.ndarray; max_w: np.ndarray; deadband: np.ndarray
     levels: np.ndarray; station: np.ndarray; floor_coral: np.ndarray; floor_algae: np.ndarray; algae_reef: np.ndarray
     processor: np.ndarray; net: np.ndarray; climb: np.ndarray; station_side: np.ndarray
-    times: np.ndarray; intake_depth: np.ndarray; intake_half_width: np.ndarray
+    times: np.ndarray; succ: np.ndarray; intake_depth: np.ndarray; intake_half_width: np.ndarray
 
     def control(self):
         return {"max_v": self.max_v, "max_w": self.max_w, "deadband": self.deadband, "offsets": self.offsets}
@@ -86,6 +86,8 @@ def sample_params(profiles: list[dict], n: int, goals: list[str], rng, randomize
             }
             ts = rng.uniform(*rnd["times_scale"]) if "times_scale" in rnd else 1.0
             vals["times"] = np.array([mech["times_s"].get(g, 0.0) * ts for g in goals])
+            sp, spr = mech.get("success_p", {}), rnd.get("success_p", {})
+            vals["succ"] = np.array([rng.uniform(*spr[g]) if g in spr else sp.get(g, 1.0) for g in goals])
             if cap:
                 lv = np.array([rng.random() < cap[l] for l in LEVELS])
                 c = {k: rng.random() < cap[k] for k in ("station", "floor_coral", "floor_algae", "algae_reef", "processor", "net")}

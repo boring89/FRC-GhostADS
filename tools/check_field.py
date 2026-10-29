@@ -54,6 +54,52 @@ class Cad:
         return [n for n in self.sc.graph.nodes_geometry if pred(self.chain(n))]
 
 
+def reef_face_points(cad, g, a, f, per_m2=40000):
+    """Surface samples of the reef parts in front of face f of alliance a, in the face frame
+    (outward along the face normal from the tag plane, lateral, z). (P,3)"""
+    import trimesh
+    fc, n, t = g.reef_fc[a, f], g.reef_n[a, f], g.reef_t[a, f]
+    pts = []
+    for node in cad.sc.graph.nodes_geometry:
+        lo, hi = cad.bbox(node)
+        rel = (lo + hi)[:2] / 2 - fc
+        if abs(rel @ t) < 0.45 and -0.6 < rel @ n < 0.35 and hi[2] > 0.4 and lo[2] < 2.0:
+            T, gname = cad.sc.graph[node]
+            m = cad.sc.geometry[gname]
+            if not hasattr(m, "faces") or len(m.faces) == 0:
+                continue
+            m = m.copy()
+            m.apply_transform(T)
+            s, _ = trimesh.sample.sample_surface(m, max(200, int(m.area * per_m2)))
+            pts.append(s + cad.shift)
+    p = np.concatenate(pts)
+    rel = p[:, :2] - fc
+    return np.stack([rel @ n, rel @ t, p[:, 2]], -1)
+
+
+def _nearest(pts, q):
+    from scipy.spatial import cKDTree
+    return float(cKDTree(pts).query(np.atleast_2d(q))[0][0])
+
+
+def algae_rest(pts, r, z_lo, z_hi):
+    """Lowest sphere centre (outward, z) at lateral 0 between z_lo and z_hi that touches but does not penetrate the
+    branches, with the ball behind the branch tips (cradled by the pair, not falling off the front)."""
+    from scipy.spatial import cKDTree
+    tree = cKDTree(pts)
+    best = None
+    zs = np.arange(z_lo, z_hi, 0.002)
+    for o in np.arange(-0.30, -0.02, 0.005):
+        d, _ = tree.query(np.stack([np.full_like(zs, o), np.zeros_like(zs), zs], -1))
+        free = d >= r
+        if free[0] or not free.any():                 # nothing below holds the ball here
+            continue
+        z = zs[np.argmax(free)]
+        if best is None or z < best[1]:
+            best = (o, z)
+    return best
+
+
 def main() -> int:
     import warnings
     warnings.filterwarnings("ignore")
@@ -114,6 +160,15 @@ def main() -> int:
         label = "blue" if a == 0 else "red"
         report(f"reef {label}: x half-extent vs apothem", abs(max(hi[0] - c[0], c[0] - lo[0]) - ap), 0.02)
         report(f"reef {label}: y half-extent vs circumradius", abs(max(hi[1] - c[1], c[1] - lo[1]) - cr), 0.02)
+
+    print("Staged reef ALGAE (blue face 0 region, surface-sampled CAD)")
+    pts = reef_face_points(cad, g, 0, 0)
+    for lvl, z_lo, z_hi in (("low", 0.72, 1.25), ("high", 1.12, 1.70)):
+        o_rest, z_rest = algae_rest(pts, g.rad["algae"], z_lo, z_hi)
+        ar = g.cfg["field"]["reef"]["algae_rest"]
+        o_cfg, z_cfg = ar["outward"] * IN, ar["z"][lvl] * IN
+        report(f"algae {lvl}: game.json rest pose vs CAD cradle", np.hypot(o_cfg - o_rest, z_cfg - z_rest), 0.01)
+        report(f"algae {lvl}: penetration into branches at that pose", max(0.0, g.rad["algae"] - _nearest(pts, [o_cfg, 0.0, z_cfg])), 0.005)
 
     print("Boundary (reported only; bumper band)")
     mid = g.mid

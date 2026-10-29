@@ -115,7 +115,7 @@ class Baseline:
             vec = tgt - pos
             dirv = vec / np.maximum(np.linalg.norm(vec, axis=-1, keepdims=True), 1e-9)
             stand = tgt - dirv * (hx[..., None] + 0.07)
-            bad = self._in_keepout(stand, hx)
+            bad = self._in_keepout(stand, hx) | self._in_keepout(tgt, hx)          # piece itself next to a cage
             cost = np.where(cap & np.isfinite(dmin) & ~bad, dmin * bias, np.inf)
             upd = cost < best
             best = np.where(upd, cost, best); goal = np.where(upd, self.gi[gname], goal)
