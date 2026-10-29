@@ -143,8 +143,9 @@ def test_zone_protection_foul(sim):
     assert sim.score[0, 0] >= 6 and sim.gs.fouls[0, 1] >= 6
 
 
-def _bounce_fouls(sim, steps=120):
-    """Red robot rams the protected blue robot, backs off, rams again, ... Returns the foul points assessed."""
+def _ram(sim, pattern, steps):
+    """Red robot drives at the protected blue robot (in its reef zone) with stick pattern(k) per tick. Returns the
+    G427 points assessed against red."""
     g = sim.game
     at_face(sim, 0, 0, 0, gap=0.05)
     hx = sim.prm.half[0, 3, 0]
@@ -153,18 +154,21 @@ def _bounce_fouls(sim, steps=120):
     place(sim, 3, p, np.arctan2(-n[1], -n[0]))
     st, gl = idle(sim)
     for k in range(steps):
-        st[:, 3, 0] = -1.0 if (k // 10) % 2 == 0 else 1.0                    # 1 s in, 1 s out
+        st[:, 3, 0] = pattern(k)
         run(sim, st, gl, 1)
-    return sim.gs.fouls[0, 1]
+    return sim.gs.foul_rule[0, 1, g.foul_rules.index("G427")]
 
 
-def test_foul_cooldown_per_pair(sim):
-    capped = _bounce_fouls(sim)
-    assert 6 <= capped <= 6 * (12 // 3 + 1)                                # <= 1 foul per 3 s
-    sim.game.model["foul_cooldown_s"] = 0.0
+def test_referee_counts_interactions_not_flicker(sim):
+    """game.json foul_sep_s / foul_repeat_s: separate rams are separate fouls, contact that flickers is one."""
+    rams = _ram(sim, lambda k: -1.0 if (k // 10) % 2 == 0 else 1.0, 120)       # 1 s in, 1 s out, 6 times
+    assert rams == 6 * 6
     sim.reset()
-    free = _bounce_fouls(sim)
-    assert free > capped
+    flicker = _ram(sim, lambda k: -1.0 if k % 2 == 0 else 0.3, 80)            # in/out every 0.1 s for 8 s
+    assert flicker == 6
+    sim.reset()
+    push = _ram(sim, lambda k: -1.0, 250)                                      # 25 s of continuous contact
+    assert push == 3 * 6                                                       # at the start, after 10 s, after 20 s
 
 
 def test_one_defender_rule(sim):

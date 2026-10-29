@@ -47,8 +47,8 @@ Target of the phase: > 80 %. Not reached yet; this is a ~35 minute run, the real
 - Rollouts of the trained policy still show robots stuck at walls for 40-50 % of a match (`stuck_wall`).
 - No conservation, out-of-bounds or score/state inconsistencies so far.
 
-## Foul cooldown (`game.json` model.foul_cooldown_s = 3.0)
-G427/G428 contact fouls are assessed at most once per robot pair per 3 s (modelling assumption, not a manual rule).
+## Foul cooldown (`game.json` model.foul_cooldown_s = 3.0) - replaced, see "Fouls: referee model, pins, AUTO rules"
+G427/G428 contact fouls were assessed at most once per robot pair per 3 s (modelling assumption, not a manual rule).
 Motivation: late-training anomalies were matches where the opponent conceded 200-324 foul points. Check on
 `runs/t1/iter_000150.pt` (stochastic policy, 192 matches): cooldown 0 -> win 0.586, cooldown 3 -> 0.612 (CIs overlap,
 ~0.52-0.68), so the 60.9 % was *not* noticeably inflated by foul farming; the cap still removes the unrealistic spikes.
@@ -181,6 +181,24 @@ relative to the 97th-percentile team: p10 0.30, p25 0.45, p50 0.61, p75 0.75, p9
   stalled for > 2 s fell from 18 % to 9 % (24 matches). Remaining stalls are two robots waiting for the same face or
   station (no coordination in the baseline).
 - Also fixed: a robot's kinetic friction was computed from a second, independent draw of its static friction.
+
+## Fouls: referee model, pins, AUTO rules (game/2025/rules.py `_fouls`, `_pins`)
+Checked against the 2025 manual section 7 (V11).
+- Referee model for contact rules (G403, G405/G418, G427, G428): a contact starts a new interaction only after the two
+  robots (or robot and cage) were apart for `foul_sep_s` = 1 s; one foul when it starts, one more per `foul_repeat_s` =
+  10 s of continued contact. The old 3 s per-pair cooldown still let flickering contact (chattering contact flags in a
+  scrum) draw a foul every 3 s per pair: up to 2778 conceded points in one teacher7 self-play match. Tests: six separate
+  rams = six fouls, contact flickering every 0.1 s for 8 s = one, 25 s of continuous contact = three.
+- G425 pins (new): a robot is pinned while it touches an opponent, is held by the field (wall, reef, cage, barge
+  support) or by another robot, and moves slower than 0.3 m/s, and the pinning robot is free of the field. The count
+  runs while pinning and survives short breaks; it ends when the robots are 6 ft apart or either is 6 ft from where the
+  pin started, for more than 3 s, or when the pinner gets pinned. MINOR past 3 s, then a MAJOR for every further 3 s.
+- G403 (new): in AUTO, a robot fully across the barge zone (the G421 test) may not contact an opponent robot: MAJOR.
+- G405 (new): in AUTO, opponent cage contact is a MAJOR foul too (G418 covers TELEOP).
+- `State.foul_rule` (N, 2, 6): points conceded per alliance and rule (G403, G405/G418, G421, G425, G427, G428), sums to
+  `fouls`. The worker returns it at the end of a match (`final_rule`) and `anomalies.jsonl` logs `fouls_by_rule`;
+  the anomaly thresholds are now score > 350 or fouls > 60 (250 / 40 flagged almost every match).
+- Not modelled: G435 (human player stores at most 4 algae), G419/G420 (anchors, net contact), G422-G424, G426.
 
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up

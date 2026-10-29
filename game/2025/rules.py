@@ -14,6 +14,10 @@ from ghostsim.physics import EI, EJ, PAIRS, Pieces, piece_step
 from ghostsim.robots import ALLIANCE, R
 
 LEVELS = ("L1", "L2", "L3", "L4")
+FOUL_RULES = ("G403", "G405/G418", "G421", "G425", "G427", "G428")      # State.foul_rule columns
+FR = {k: i for i, k in enumerate(FOUL_RULES)}
+PIN_P = np.stack([PAIRS[:, 0], PAIRS[:, 1]], -1)       # (15,2) pinning robot: direction 0 = a pins b, 1 = b pins a
+PIN_V = np.stack([PAIRS[:, 1], PAIRS[:, 0]], -1)       # pinned robot
 
 
 class State:
@@ -36,8 +40,15 @@ class State:
         # points by category per alliance: 0 LEAVE, 1 CORAL, 2 ALGAE (net + processor), 3 BARGE (park/cage), 4 PENALTY
         # (points received from opponent fouls). Sum over categories == score (tested).
         self.cat = z(n, 2, 5)
-        self.prev_pair, self.prev_cage = b(n, len(PAIRS)), b(n, R, 6)
         self.g421_t = z(n, 2)
+        # referee model (_fouls): seconds each opponent pair / robot-cage pair has been apart, contact time in the
+        # current interaction since its last foul; pins per pair and direction (count, end timer, start points)
+        np_ = len(PAIRS)
+        self.pair_apart, self.pair_touch = np.full((n, np_), 1e9), z(n, np_)
+        self.cage_apart, self.cage_touch = np.full((n, R, 6), 1e9), z(n, R, 6)
+        self.pin_active, self.pin_count, self.pin_far = b(n, np_, 2), z(n, np_, 2), z(n, np_, 2)
+        self.pin_fouls, self.pin_start = i(n, np_, 2), z(n, np_, 2, 2, 2)
+        self.foul_rule = z(n, 2, len(FOUL_RULES))         # points conceded per alliance and rule (sum == fouls)
         # not game points: damage tally (own robots hit hard), teammate-contact timer (reward shaping only)
         self.damage, self.dmg_t, self.press_t = z(n, R), z(n, R), z(n, R)
         # pushing a teammate that is scoring (reward only): events per robot, and last substep's teammate contacts
@@ -48,7 +59,6 @@ class State:
         self.align_tgt = z(n, R, 3)
         self.align_stuck, self.align_last = z(n, R), z(n, R, 2)
         self.align_bad = b(n, R, 12)              # candidates given up after being stuck (re-chosen next)
-        self.pair_last = np.full((n, len(PAIRS)), -1e9)   # time of last G427/G428 foul per robot pair
         # failed actions (robot.success_p): misses per robot; CORAL that found no free floor slot (left the game)
         self.miss, self.coral_lost = z(n, R), i(n)
         # pieces scored per robot (statistics): coral [L1, L2, L3, L4], algae [processor, net]
@@ -135,6 +145,7 @@ class Game(GameBase):
         ts = f["reef"]["trough_slots"]
         assert self.l1_cap <= ts["per_layer"] * len(ts["z"]), "l1_capacity_per_face exceeds the trough slots"
         self.stop_ids = np.array([self.gi[g] for g in m.get("stop_goals", [])], np.int64)
+        self.foul_rules = FOUL_RULES                     # columns of State.foul_rule
         pc = cfg["pieces"]
         self.kc, self.ka = pc["coral"]["floor_slots"], pc["algae"]["floor_slots"]
         self.coral_count = pc["coral"]["count"]
@@ -240,13 +251,15 @@ class Game(GameBase):
         st.cage_deep[idx] = prm.climb[idx] != 1                          # cage k <-> driver station k
         st.score[idx], st.fouls[idx] = 0, 0
         st.cat[idx] = 0
-        st.prev_pair[idx], st.prev_cage[idx], st.g421_t[idx] = False, False, 0
+        st.g421_t[idx] = 0
+        st.pair_apart[idx], st.pair_touch[idx], st.cage_apart[idx], st.cage_touch[idx] = 1e9, 0, 1e9, 0
+        st.pin_active[idx], st.pin_count[idx], st.pin_far[idx], st.pin_fouls[idx], st.pin_start[idx] = False, 0, 0, 0, 0
+        st.foul_rule[idx] = 0
         st.damage[idx], st.dmg_t[idx], st.press_t[idx] = 0, 0, 0
         st.push_events[idx], st.prev_tm[idx] = 0, False
         st.align_face[idx], st.align_side[idx] = -1, -1
         st.align_t[idx], st.aligned[idx], st.align_tgt[idx] = 0, False, 0
         st.align_stuck[idx], st.align_last[idx], st.align_bad[idx] = 0, 0, False
-        st.pair_last[idx] = -1e9
         st.miss[idx], st.coral_lost[idx] = 0, 0
         st.scored_coral[idx], st.scored_algae[idx] = 0, 0
 
@@ -540,9 +553,15 @@ class Game(GameBase):
         st.push_events += (push_a.astype(float) @ EI.T + push_b.astype(float) @ EJ.T)
 
     def _fouls(self, st, body, prm, t, live, auto, dt):
-        """G427 zone protection, G428 cage protection, G418 opponent cage, G421 one defender.
-        Returns points given to the opponent, attributed to the offending robot (N,R)."""
-        n, P = len(t), self.points
+        """G403, G405/G418, G421, G425, G427, G428 (2025 manual section 7). Returns points given to the opponent,
+        attributed to the offending robot (N,R); per-rule totals in st.foul_rule.
+
+        Referee model for contact rules: a contact starts a new interaction only after the two robots (or the robot and
+        the cage) were apart for model.foul_sep_s; the interaction draws one foul when it starts, then one more per
+        model.foul_repeat_s of continued contact. Contact that flickers on and off is one interaction."""
+        n, P, m = len(t), self.points, self.model
+        MAJ, MIN = P["major_foul"], P["minor_foul"]
+        sep, rep = m["foul_sep_s"], m["foul_repeat_s"]
         th = body.pose[..., 2]
         cs, sn = np.cos(th), np.sin(th)
         zd, _, _ = geo.box_poly_sat(body.pose[..., :2], prm.half, cs, sn, self.zones, points=False)      # (N,R,4)
@@ -550,37 +569,104 @@ class Game(GameBase):
         in_own = (zd[:, rr, ALLIANCE] > 0) | (zd[:, rr, 2 + ALLIANCE] > 0)
         a_, b_ = PAIRS[:, 0], PAIRS[:, 1]
         opp = ALLIANCE[a_] != ALLIANCE[b_]
-        new = body.pair_contact & ~st.prev_pair & opp & live[:, None]
-        st.prev_pair = body.pair_contact.copy()
+        foul, rule = np.zeros((n, R)), np.zeros((n, R, len(FOUL_RULES)))
+
+        def add(on_a, on_b, k, pts):                     # (N,15) masks: foul on robot a / b of each pair
+            f = (on_a.astype(float) @ EI.T + on_b.astype(float) @ EJ.T) * pts
+            rule[..., FR[k]] += f
+            return f
+
+        # ---- robot-robot interactions (G403, G427, G428)
+        touch = body.pair_contact & opp & live[:, None]
+        new = touch & (st.pair_apart >= sep)
+        st.pair_apart = np.where(touch, 0.0, st.pair_apart + dt)
+        st.pair_touch = np.where(new, 0.0, np.where(touch, st.pair_touch + dt, st.pair_touch))
+        again = touch & ~new & (st.pair_touch >= rep)
+        st.pair_touch = np.where(again, 0.0, st.pair_touch)
+        call = new | again
         cage_c = body.poly_contact[..., self.cage_poly]                                      # (N,R,6)
         own_cage = np.arange(6)[None, :] // 3 == ALLIANCE[:, None]                           # (R,6)
         touching_own = st.climbed | (cage_c & own_cage).any(-1)
         endgame = (t >= self.auto_s + self.teleop_s - self.endgame_s)[:, None]
-        by_a = new & (in_own[:, b_] | (endgame & touching_own[:, b_]))                      # a hit protected b
-        by_b = new & (in_own[:, a_] | (endgame & touching_own[:, a_]))
-        # at most one foul per robot pair per `foul_cooldown_s` (referees do not call every re-contact)
-        cd = (t[:, None] - st.pair_last) >= self.model.get("foul_cooldown_s", 3.0)
-        by_a, by_b = by_a & cd, by_b & cd
-        st.pair_last = np.where(by_a | by_b, t[:, None], st.pair_last)
-        foul = (by_a @ EI.T + by_b @ EJ.T) * P["major_foul"]
-        g418 = cage_c & ~own_cage & ~st.prev_cage & (~auto & live)[:, None, None]
-        foul += g418.sum(-1) * P["major_foul"]
-        st.prev_cage = cage_c.copy()
+        zone_a, zone_b = in_own[:, a_], in_own[:, b_]                                        # protected robot a / b
+        cage_a = endgame & touching_own[:, a_] & ~zone_a                                     # G428 when G427 does not apply
+        cage_b = endgame & touching_own[:, b_] & ~zone_b
+        foul += add(call & zone_b, call & zone_a, "G427", MAJ)                               # a hit protected b, ...
+        foul += add(call & cage_b, call & cage_a, "G428", MAJ)
         ext_x = prm.half[..., 0] * np.abs(cs) + prm.half[..., 1] * np.abs(sn)
         x = body.pose[..., 0]
         beyond = np.where(ALLIANCE == 0, x - ext_x > self.mid[0] + self.bz_half, x + ext_x < self.mid[0] - self.bz_half)
+        au = auto[:, None]
+        foul += add(call & au & beyond[:, a_], call & au & beyond[:, b_], "G403", MAJ)     # AUTO, across the barge zone
+
+        # ---- opponent cages: G405 (AUTO) and G418 (TELEOP), same interaction model per robot and cage
+        cc = cage_c & ~own_cage & live[:, None, None]
+        newc = cc & (st.cage_apart >= sep)
+        st.cage_apart = np.where(cc, 0.0, st.cage_apart + dt)
+        st.cage_touch = np.where(newc, 0.0, np.where(cc, st.cage_touch + dt, st.cage_touch))
+        againc = cc & ~newc & (st.cage_touch >= rep)
+        st.cage_touch = np.where(againc, 0.0, st.cage_touch)
+        f = (newc | againc).sum(-1) * MAJ
+        foul += f
+        rule[..., FR["G405/G418"]] += f
+
+        # ---- G421: more than one robot fully beyond the barge zones on the opponent side
         for a in range(2):
             mine = beyond & (ALLIANCE == a)
             many = (mine.sum(1) > 1) & live
             t0 = st.g421_t[:, a]
             t1 = np.where(many, t0 + dt, 0.0)
-            pts = np.where(many & (t0 == 0), P["minor_foul"], 0.0) \
-                + np.where(many & (t0 > 0) & (np.floor(t1 / 3.0) > np.floor(t0 / 3.0)), P["major_foul"], 0.0)
+            pts = np.where(many & (t0 == 0), MIN, 0.0) \
+                + np.where(many & (t0 > 0) & (np.floor(t1 / 3.0) > np.floor(t0 / 3.0)), MAJ, 0.0)
             st.g421_t[:, a] = t1
-            foul += mine * (pts / np.maximum(mine.sum(1), 1))[:, None]
+            f = mine * (pts / np.maximum(mine.sum(1), 1))[:, None]
+            foul += f
+            rule[..., FR["G421"]] += f
+
+        # ---- G425: pins
+        f = self._pins(st, body, live, opp, dt)
+        foul += f
+        rule[..., FR["G425"]] += f
+
         for a in range(2):
             st.fouls[:, a] += foul[:, ALLIANCE == a].sum(1)
+            st.foul_rule[:, a] += rule[:, ALLIANCE == a].sum(1)
         return foul
+
+    def _pins(self, st, body, live, opp, dt):
+        """G425 3-count. Robot P pins opponent V while they touch, V is slow and also held by the field (wall, reef,
+        cage, barge support) or by another robot, and P itself is free of the field. The count runs while pinning and is
+        kept through short breaks; the pin ends when the robots are 6 ft apart, or either robot is 6 ft from where the
+        pin started, for more than 3 s, or when P gets pinned. MINOR when the count passes 3 s, then a MAJOR for every
+        further 3 s. Returns points per pinning robot (N,R)."""
+        m, P = self.model, self.points
+        C, L, T_end = m["pin_count_s"], m["pin_end_dist_m"], m["pin_end_s"]
+        pc = body.pair_contact
+        n_rc = pc.astype(float) @ EI.T + pc.astype(float) @ EJ.T                       # robot contacts per robot
+        held = body.wall_contact | body.poly_contact.any(-1)
+        sp = np.linalg.norm(body.vel[..., :2], axis=-1)
+        pos = body.pose[..., :2]
+        contact = pc[..., None] & opp[None, :, None] & live[:, None, None]             # (N,15,2)
+        now = contact & (held[:, PIN_V] | (n_rc[:, PIN_V] >= 2)) & ~held[:, PIN_P] & (sp[:, PIN_V] < m["pin_victim_speed_mps"])
+        start = now & ~st.pin_active
+        st.pin_active |= start
+        st.pin_count = np.where(start, 0.0, st.pin_count)
+        st.pin_far = np.where(start, 0.0, st.pin_far)
+        st.pin_fouls = np.where(start, 0, st.pin_fouls)
+        st.pin_start[..., 0, :] = np.where(start[..., None], pos[:, PIN_P], st.pin_start[..., 0, :])
+        st.pin_start[..., 1, :] = np.where(start[..., None], pos[:, PIN_V], st.pin_start[..., 1, :])
+        act = st.pin_active
+        st.pin_count = np.where(act & now, st.pin_count + dt, st.pin_count)
+        far = (np.linalg.norm(pos[:, PIN_P] - pos[:, PIN_V], axis=-1) >= L) | \
+            (np.linalg.norm(pos[:, PIN_P] - st.pin_start[..., 0, :], axis=-1) >= L) | \
+            (np.linalg.norm(pos[:, PIN_V] - st.pin_start[..., 1, :], axis=-1) >= L)
+        st.pin_far = np.where(act & far, st.pin_far + dt, 0.0)
+        due = np.where(act, np.floor(st.pin_count / C).astype(np.int64), st.pin_fouls)
+        k = np.maximum(due - st.pin_fouls, 0)
+        pts = np.where(k > 0, np.where(st.pin_fouls == 0, P["minor_foul"] + (k - 1) * P["major_foul"], k * P["major_foul"]), 0.0)
+        st.pin_fouls = st.pin_fouls + k
+        st.pin_active &= ~((st.pin_far > T_end) | now[..., ::-1])                          # ended, or the pinner is pinned
+        return pts[..., 0] @ EI.T + pts[..., 1] @ EJ.T
 
     # ------------------------------------------------------------------ match events
     def end_auto(self, st, body, prm, mask):

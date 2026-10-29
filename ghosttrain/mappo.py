@@ -135,6 +135,7 @@ class Trainer:
         from .obs import Encoder
         from ghostsim import load
         self.enc = Encoder(load("2025"))
+        self.foul_rules = self.enc.g.foul_rules              # anomaly log: conceded points per rule
         self.net = TeacherNet(self.enc.n_goals, self.enc.G, cfg.d).to(self.dev)
         if cfg.init:
             sd = torch.load(cfg.init, map_location=self.dev, weights_only=False)
@@ -250,9 +251,14 @@ class Trainer:
             self.league.record(opp, win)
             fb, fr = self.ep_foul[e]
             self.stats["ep"].append((opp, float(b), float(r), win, float(fb), float(fr)))
-            if max(b, r) > 250 or max(fb, fr) > 40:                       # exploit candidates -> anomalies.jsonl
+            if max(b, r) > 350 or max(fb, fr) > 60:                       # exploit candidates -> anomalies.jsonl
+                rules = getattr(self, "foul_rules", None)
+                fr_rule = res["final_rule"][e] if "final_rule" in res else None
+                by_rule = {} if fr_rule is None or rules is None else \
+                    {k: [float(fr_rule[0, i]), float(fr_rule[1, i])] for i, k in enumerate(rules) if fr_rule[:, i].any()}
                 self.anom_f.write(json.dumps({"it": self.it, "env": int(e), "opp": opp, "score": [float(b), float(r)],
-                                              "robot_points": self.ep_pts[e].tolist(), "fouls_committed": [float(fb), float(fr)]}) + "\n")
+                                              "robot_points": self.ep_pts[e].tolist(), "fouls_committed": [float(fb), float(fr)],
+                                              "fouls_by_rule": by_rule}) + "\n")
                 self.anom_f.flush()
         d = res["done"]
         self.ep_pts[d] = 0.0; self.ep_foul[d] = 0.0

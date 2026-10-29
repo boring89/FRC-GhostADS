@@ -248,7 +248,6 @@
   "net_heading_tol_deg": 180.0,
   "cage_approach_m": 0.25,
   "hp_net_success": 0.5,
-  "foul_cooldown_s": 3.0,
   "damage_speed_mps": 2.5,
   "damage_points": 1,
   "damage_cooldown_s": 1.0,
@@ -296,6 +295,14 @@
    "gap_m": 0.03
   },
   "_virtual_align": "auto_align off: the robot's own drive-to-pose is not simulated; its time is added to the dwell instead: settle + distance(lateral to the target, gap beyond gap_m) / speed + heading error / omega. World-championship level estimates.",
-  "miss_spawn_gap_m": 0.05
+  "miss_spawn_gap_m": 0.05,
+  "foul_sep_s": 1.0,
+  "foul_repeat_s": 10.0,
+  "_foul_referee": "Contact fouls (G403, G405/G418, G427, G428): a contact starts a new interaction only after the robots were apart for foul_sep_s; one foul when it starts, one more per foul_repeat_s of continued contact (referee model, not in the manual; replaces the 3 s per-pair cooldown that still let flickering contact draw hundreds of fouls).",
+  "pin_count_s": 3.0,
+  "pin_end_dist_m": 1.83,
+  "pin_end_s": 3.0,
+  "pin_victim_speed_mps": 0.3,
+  "_pin": "G425: count, 6 ft and 3 s end criteria from the manual; a robot is pinned while it touches the opponent, is held by the field or another robot, and moves slower than pin_victim_speed_mps (model)."
  }
 }
