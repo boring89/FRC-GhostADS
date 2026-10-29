@@ -64,11 +64,17 @@ class RenderClient:
         return protocol.recv(self.sock)
 
     def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto", msaa=0):
-        """visual: "auto" (CAD model if game/<year>/visual/field.glb exists), "cad", or "proxy" (procedural)."""
+        """visual: "auto" (CAD model if game/<year>/visual/field.glb exists), "cad", "hi" (the detailed field_hi.glb when
+        present, for the live view; else as "auto"), "proxy" (procedural), or a path to a .glb."""
         IN = 0.0254
         pc, f = game.cfg["pieces"], game.cfg["field"]
         bits = json.loads((game.dir / "tag36h11_bits.json").read_text())["bits"]
         glb = game.dir / "visual" / "field.glb"
+        if str(visual).endswith(".glb"):
+            glb, visual = Path(visual), "cad"
+        elif visual == "hi":
+            hi = game.dir / "visual" / "field_hi.glb"
+            glb, visual = (hi, "cad") if hi.exists() else (glb, "auto")
         use_cad = visual == "cad" or (visual == "auto" and glb.exists())
         if use_cad and not glb.exists():
             raise FileNotFoundError(f"{glb} missing: run tools/prepare_field.py")

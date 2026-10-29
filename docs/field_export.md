@@ -12,20 +12,33 @@
   L1 CORAL (`field.reef.trough_slots`: 3 end to end per layer, 2 layers; a 3rd layer would hit the L2 branches).
 
 ## Visual geometry (renderer)
-`ghostrender` uses the optimised CAD model when `game/2025/visual/field.glb` exists, otherwise the
-procedural proxy scene generated from the same definition (`SimCfg`-independent, `visual="auto"|"cad"|"proxy"`).
+`ghostrender` uses the optimised CAD model when `game/2025/visual/field.glb` exists, otherwise the procedural proxy
+scene generated from the same definition (`visual="auto"|"cad"|"proxy"`, or a path to a .glb). `visual="hi"` loads
+the detailed `field_hi.glb` when present; the live view (`ghosttrain/broadcast.py`) uses it, robot-camera training
+uses `field.glb`.
 
-### Regenerating the CAD visual (source: official Onshape GLB, 947 k unique / 5.3 M drawn triangles)
+### Regenerating the CAD visual (source: official Onshape GLB, 947 k unique / 2.26 M drawn triangles >= 4 cm)
 ```
-uv run python tools/prepare_field.py            # finds REEFSCAPE FIELD*.glb in the repo root, ~10 s
-uv run python tools/check_field.py              # cross-checks CAD vs tags / cages / barge support / reef
+uv run python tools/prepare_field.py "REEFSCAPE FIELD (FE-2025) (1).glb"   # ~25 s, writes field.glb and field_hi.glb
+uv run python tools/check_field.py                                          # CAD vs tags / cages / barge / reef / algae
 ```
 `prepare_field.py` removes AprilTags (FE-00083), the six CAGE assemblies, leftover CORAL/ALGAE, the scoring table
-and parts < 4 cm; merges the ~54 000 remaining instances into one mesh per material (carpet is separate so
-domain randomisation can recolour it), decimates to ~300 k triangles, and writes Y-up glTF.
-The source (51 MB) and the output (~30 MB) are not committed (add git LFS if the team wants them in the repo).
+and parts < 4 cm; decimates every unique part with one ratio, raised to a floor for thin long parts (pipes, rods:
+64 / 24 triangles in field_hi / field, other parts 12 / 4), chosen so that the drawn total meets the budget
+(`--budget` 300 k for field.glb, `--budget-hi` 1.5 M for field_hi.glb); gives every part crease-angle normals
+(35 deg: cylinders smooth, boxes sharp); merges the instances into one mesh per material (carpet separate so
+domain randomisation can recolour it) and writes Y-up glTF with double-sided materials, as in the source.
+The source (51 MB) and the outputs (15 / 54 MB) are not committed (add git LFS if the team wants them in the repo).
 
 Source frame (verified against the tag file to 5 mm): metres, Z up, origin at the field centre, +X toward red.
-Quality notes: thin reef pipes get coarse at this budget (invisible at 160x120); the polycarbonate guardrail is
-modelled opaque in the source, so cameras cannot see through it (they can on the real field).
-Rendering cost: 24 cameras at 160x120 -> ~500 images/s with CAD vs ~720 with the proxy scene.
+
+Fixed on 2026-10-29 (the field looked broken): the old export flipped every triangle after the axis change, which is
+a rotation (det +1) and keeps the winding, and recomputed normals from the flipped triangles; with single-sided
+materials Godot culled the outside of every part and drew its inside (coral station, processor and reef faces looked
+hollow or missing). The single 6 % decimation ratio also collapsed the reef pipes to slivers. Regression test:
+`tests/test_prepare_field.py`. A single-sided export renders faster but leaves holes where decimation opened thin
+parts, so the materials stay double-sided.
+Quality notes: the polycarbonate guardrail is modelled opaque in the source (no transparency in the CAD materials),
+so cameras cannot see through it (they can on the real field).
+Rendering cost (GTX 1070, 6 envs x 4 cameras at 160x120, simulation stepping included): old field.glb 301 images/s,
+new field.glb 294, field_hi.glb 207. Live view 1280x720 with field_hi.glb: 24 fps (28.5 with the old, broken field).

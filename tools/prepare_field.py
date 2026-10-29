@@ -1,13 +1,15 @@
 """Official FE-2025 CAD (Onshape GLB) -> optimised visual model for the renderer.
 
-    uv run python tools/prepare_field.py [source.glb] [--budget 300000]
+    uv run python tools/prepare_field.py [source.glb] [--budget 300000] [--budget-hi 1500000]
 
 What it does
   - removes what the renderer draws itself: AprilTags (FE-00083, placed from the tag file), the six CAGE
     assemblies (animated), any leftover CORAL/ALGAE, plus the scoring table and small hardware (< 4 cm)
-  - merges the ~62 000 part instances into one mesh per material, decimating to the triangle budget
-  - re-bases the model onto the field frame used everywhere else and writes Y-up glTF (Godot convention)
-Output: game/2025/visual/field.glb (+ report). The source and the output are NOT committed (size);
+  - decimates every unique part with one ratio, raised to a floor for thin long parts (pipes keep their shape), so
+    that the drawn total meets the budget; crease-angle normals; merges the instances into one mesh per material
+  - re-bases the model onto the field frame used everywhere else and writes Y-up glTF (Godot convention); keeps the
+    source's triangle winding (the axis change is a rotation) and its double-sided materials
+Output: game/2025/visual/field.glb (robot cameras, --budget) and field_hi.glb (live view, --budget-hi). The source and the output are NOT committed (size);
 the renderer falls back to the procedural proxy scene when field.glb is absent.
 
 Source frame (verified against the tag file, <= 5 mm): metres, Z up, origin at the field centre,
@@ -16,6 +18,7 @@ Source frame (verified against the tag file, <= 5 mm): metres, Z up, origin at t
 from __future__ import annotations
 
 import argparse
+import collections
 import re
 import sys
 import time
@@ -89,57 +92,98 @@ def kept_instances(scene):
         yield node, g, T, under_carpet(node)
 
 
-def build(src: Path, dst: Path, budget: int, field_len: float, field_wid: float):
+ELONGATED = (0.15, 3.0)   # parts longer than 0.15 m and 3x their next extent (pipes, rods, rails) ...
+MIN_TRIS = {"hi": (64, 12), "lo": (24, 4)}   # ... keep at least this many triangles (thin parts collapsed to slivers),
+                                              # other parts at least this many; per level of detail
+CREASE_DEG = 35.0         # smooth normals across edges flatter than this (cylinders look round, boxes stay sharp)
+
+
+def _plan(scene, inst, budget, floors):
+    """Per unique geometry: target triangle count. One ratio r for all parts, raised to each part's floor, chosen so
+    the drawn total (instances included) meets the budget."""
+    use = collections.Counter(g for _, g, _, _ in inst)
+    n, floor = {}, {}
+    for g in use:
+        m = scene.geometry[g]
+        e = np.sort(np.ptp(m.bounds, axis=0))[::-1]
+        if e[0] < MIN_EXTENT_M:
+            continue
+        n[g] = len(m.faces)
+        lo = floors[0] if (e[0] > ELONGATED[0] and e[0] > ELONGATED[1] * max(e[1], 1e-6)) else floors[1]
+        floor[g] = min(n[g], lo)
+    drawn = lambda r: sum(use[g] * max(floor[g], min(n[g], r * n[g])) for g in n)
+    lo_r, hi_r = 0.0, 1.0
+    for _ in range(40):
+        mid = (lo_r + hi_r) / 2
+        lo_r, hi_r = (mid, hi_r) if drawn(mid) < budget else (lo_r, mid)
+    r = lo_r
+    return {g: int(max(floor[g], min(n[g], r * n[g]))) for g in n}, r, drawn(r), sum(use[g] * n[g] for g in n)
+
+
+def _part(m, target):
+    """Decimate one unique part and give it crease-angle normals. Returns (v, f, normals) in the part frame."""
     import fast_simplification as fs
+    import trimesh
+    v, f = np.asarray(m.vertices, np.float32), np.asarray(m.faces, np.int32)
+    if target < len(f):
+        v, f = fs.simplify(v, f, target_count=target, agg=5)
+    tm = trimesh.Trimesh(np.asarray(v, np.float64), np.asarray(f, np.int64), process=True)
+    if len(tm.faces) == 0:
+        return None
+    tm = trimesh.graph.smooth_shade(tm, angle=np.radians(CREASE_DEG), facet_minarea=None)
+    return np.asarray(tm.vertices), np.asarray(tm.faces), np.asarray(tm.vertex_normals)
+
+
+def build(src: Path, dst: Path, budget: int, field_len: float, field_wid: float, scene=None, floors=MIN_TRIS["hi"]):
     import trimesh
 
     t0 = time.time()
-    scene = trimesh.load(str(src), force="scene")
+    scene = scene or trimesh.load(str(src), force="scene")
     inst = list(kept_instances(scene))
-    total_in = sum(len(scene.geometry[g].faces) for _, g, _, _ in inst)
-    ratio = min(1.0, budget / max(total_in, 1))
-    print(f"loaded {len(scene.graph.nodes_geometry)} instances; kept {len(inst)} "
-          f"({total_in:,} tris) -> ratio {ratio:.3f} for budget {budget:,}  [{time.time() - t0:.0f}s]")
-    cache: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray] | None] = {}
+    targets, r, drawn, total_in = _plan(scene, inst, budget, floors)
+    print(f"{len(scene.graph.nodes_geometry)} instances; kept {len(inst)} ({total_in:,} tris drawn) -> ratio {r:.3f}, "
+          f"{drawn:,.0f} tris for budget {budget:,}  [{time.time() - t0:.0f}s]")
+    cache: dict[str, tuple | None] = {}
     groups: dict[str, dict] = {}
     shift = np.array([field_len / 2, field_wid / 2, 0.0])
     t1 = time.time()
     for node, g, T, is_carpet in inst:
+        if g not in targets:
+            continue
         if g not in cache:
             m = scene.geometry[g]
-            if np.ptp(m.bounds, axis=0).max() < MIN_EXTENT_M:
-                cache[g] = None
-            else:
-                v, f = np.asarray(m.vertices, np.float32), np.asarray(m.faces, np.int32)
-                tgt = max(min(len(f), 6), int(len(f) * ratio))
-                if tgt < len(f):
-                    v, f = fs.simplify(v, f, target_count=tgt, agg=7)
-                cache[g] = (np.asarray(v, np.float64), np.asarray(f, np.int64), _rgba(getattr(m.visual, "material", None)))
+            part = _part(m, targets[g])
+            cache[g] = None if part is None else (*part, _rgba(getattr(m.visual, "material", None)))
         if cache[g] is None:
             continue
-        v, f, rgba = cache[g]
+        v, f, nv, rgba = cache[g]
+        A = T[:3, :3]
+        wv = v @ A.T + T[:3, 3] + shift
+        nw = nv @ np.linalg.inv(A)                                          # normals: inverse-transpose
+        nw /= np.maximum(np.linalg.norm(nw, axis=1, keepdims=True), 1e-12)
+        ff = f[:, [0, 2, 1]] if np.linalg.det(A) < 0 else f                 # mirrored instance: keep the outside out
         key = "carpet" if is_carpet else "m_" + "".join(f"{int(round(c * 255)):02x}" for c in rgba[:3])
-        wv = v @ T[:3, :3].T + T[:3, 3] + shift
-        d = groups.setdefault(key, {"v": [], "f": [], "n": 0, "rgba": rgba})
+        d = groups.setdefault(key, {"v": [], "f": [], "n": [], "k": 0, "rgba": rgba})
         d["v"].append(wv)
-        d["f"].append(f + d["n"])
-        d["n"] += len(wv)
-    print(f"merged {len(groups)} material groups [{time.time() - t1:.0f}s]")
+        d["n"].append(nw)
+        d["f"].append(ff + d["k"])
+        d["k"] += len(wv)
+    print(f"decimated {len(cache)} unique parts, merged into {len(groups)} material groups [{time.time() - t1:.0f}s]")
     out = trimesh.Scene()
     tris = 0
     for key, d in sorted(groups.items()):
-        v, f = np.concatenate(d["v"]), np.concatenate(d["f"])
-        gv = np.stack([v[:, 0], v[:, 2], -v[:, 1]], 1)                       # field (x,y,z) -> Y-up (x,z,-y)
-        f = f[:, [0, 2, 1]]                                                   # keep CCW after the axis swap
-        mesh = trimesh.Trimesh(gv, f, process=False)
-        mesh.unmerge_vertices()
-        _ = mesh.vertex_normals
+        v, f, nn = np.concatenate(d["v"]), np.concatenate(d["f"]), np.concatenate(d["n"])
+        # field (x, y, z) -> glTF Y-up (x, z, -y): a rotation (det +1), so the triangle winding stays as it is
+        gv = np.stack([v[:, 0], v[:, 2], -v[:, 1]], 1)
+        gn = np.stack([nn[:, 0], nn[:, 2], -nn[:, 1]], 1)
+        mesh = trimesh.Trimesh(gv, f, vertex_normals=gn, process=False)
         rough, metal = (0.95, 0.0) if key == "carpet" else (0.6, 0.35)
-        mesh.visual = trimesh.visual.TextureVisuals(material=trimesh.visual.material.PBRMaterial(
-            name=key, baseColorFactor=(d["rgba"] * 255).astype(np.uint8).tolist(), roughnessFactor=rough, metallicFactor=metal))
+        mat = trimesh.visual.material.PBRMaterial(name=key, baseColorFactor=(d["rgba"] * 255).astype(np.uint8).tolist(),
+                                                  roughnessFactor=rough, metallicFactor=metal, doubleSided=True)
+        mesh.visual = trimesh.visual.TextureVisuals(material=mat)
         out.add_geometry(mesh, node_name=key, geom_name=key)
         tris += len(f)
-        print(f"  {key:12s} {len(f):8,d} tris   rgba {np.round(d['rgba'], 2)}")
+        print(f"  {key:12s} {len(f):9,d} tris   rgba {np.round(d['rgba'], 2)}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     out.export(str(dst), include_normals=True)
     print(f"wrote {dst} : {tris:,} tris in {len(groups)} meshes, {dst.stat().st_size / 1e6:.1f} MB  [{time.time() - t0:.0f}s]")
@@ -147,13 +191,20 @@ def build(src: Path, dst: Path, budget: int, field_len: float, field_wid: float)
 
 
 def main() -> int:
+    import trimesh
     ap = argparse.ArgumentParser()
     ap.add_argument("source", nargs="?")
-    ap.add_argument("--budget", type=int, default=300_000)
+    ap.add_argument("--budget", type=int, default=300_000, help="field.glb: robot cameras (many small renders)")
+    ap.add_argument("--budget-hi", type=int, default=1_500_000, help="field_hi.glb: live view; 0 = skip")
     ap.add_argument("--out", default=str(ROOT / "game" / "2025" / "visual" / "field.glb"))
     a = ap.parse_args()
     from ghostsim.geometry import IN
-    build(find_source(a.source), Path(a.out), a.budget, 690.875 * IN, 317.0 * IN)
+    src = find_source(a.source)
+    scene = trimesh.load(str(src), force="scene")
+    out = Path(a.out)
+    build(src, out, a.budget, 690.875 * IN, 317.0 * IN, scene, MIN_TRIS["lo"])
+    if a.budget_hi:
+        build(src, out.with_name(out.stem + "_hi.glb"), a.budget_hi, 690.875 * IN, 317.0 * IN, scene, MIN_TRIS["hi"])
     return 0
 
 

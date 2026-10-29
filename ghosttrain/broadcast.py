@@ -294,10 +294,10 @@ class Broadcast:
         tags, tag_ids = tag_corners(game)
         rc_top = RenderClient(port=self.ports[0])     # separate Godot instances: same pid would share a port
         rc_top.configure(game, [top_rig(game, *self.top_size)], n_envs=1, width=self.top_size[0],
-                         height=self.top_size[1], max_cams=1, msaa=2)
+                         height=self.top_size[1], max_cams=1, msaa=2, visual="hi")
         rc_pov = RenderClient(port=self.ports[1])
         rc_pov.configure(game, [robot_rig(TILE_RENDER)], n_envs=1, width=TILE_RENDER[0], height=TILE_RENDER[1],
-                         max_cams=2, msaa=0)
+                         max_cams=2, msaa=0, visual="hi")
         rc_robot = None                               # 640x480 client, started only when the robot page is open
         full_cam = robot_rig(self.pov_size)
         canvas = np.zeros((CANVAS[1], CANVAS[0], 3), np.uint8)
@@ -375,7 +375,7 @@ class Broadcast:
                         rc_robot = RenderClient(port=self.ports[2])
                         clients.append(rc_robot)
                         rc_robot.configure(game, [full_cam], n_envs=1, width=self.pov_size[0], height=self.pov_size[1],
-                                           max_cams=1, msaa=0)
+                                           max_cams=1, msaa=0, visual="hi")
                         if appearance is not None:
                             rc_robot.set_appearance(0, *appearance)
                     img_rob, _ = rc_robot.render(state, [(0, latest["sel"], 0)])
