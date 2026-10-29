@@ -1,9 +1,11 @@
-"""Live broadcast of training matches: 1280x720 at 30 fps, rendered only while someone is watching.
+"""Live broadcast of training matches: 1920x1080 at 30 fps, rendered only while someone is watching.
 
-Layout (official-style, red/blue, no sponsor or FIRST artwork):
-  top      1280x400  fixed field camera, scoreboard bar on top (blue left, red right), training step badge
-  bottom   two 640x320 tiles: a random BLUE robot and a random RED robot POV (re-picked every 10 s)
-  after a match: 10 s result card (LEAVE / CORAL / ALGAE / BARGE / PENALTY / WINS, score-based wins)
+Layout of the video (no graphics in it: the scoreboard, tile labels and the result card are an HTML overlay on the
+/live page, fed by Broadcast.live / live_state(), so they stay sharp at any size and cost no rendering):
+  top      1920x720  field camera behind the scoring table, rendered 1:1, MSAA 4x + FXAA
+  bottom   two 960x360 follow cameras (tripods outside the field, pan and zoom) on a BLUE and a RED robot,
+           re-picked every 10 s, 1:1
+The live view has no crowd, a dark background and fixed lighting (training cameras keep their randomisation).
 
 A separate robot page (/robot) shows one selected robot POV at 640x480 with the tags the detector sees
 (same visibility rule as ghostsim.sensors) and the robot status.
@@ -23,24 +25,100 @@ import numpy as np
 
 from .broadcast_sim import RESULT_S, TICK_S
 
-TOP = (1280, 400)
-TILE = (640, 320)
-TILE_RENDER = (427, 320)          # robot POV rendered at the size it is shown (4:3)
-CANVAS = (1280, 720)
+CANVAS = (1920, 1080)
+TOP = (1920, 720)
+TILE = (960, 360)
 FPS = 30
 RESULT_S = 10.0
 TILE_CHANGE_S = 10.0
-BLUE = (200, 90, 25)            # BGR
-RED = (40, 30, 200)
-DARK = (22, 20, 18)
+GOAL_LABEL = {"idle": "IDLE", "coral_station": "CORAL STATION", "coral_floor": "CORAL FLOOR", "algae_floor": "ALGAE FLOOR",
+              "algae_reef": "ALGAE REEF", "score_L1": "SCORE L1", "score_L2": "SCORE L2", "score_L3": "SCORE L3",
+              "score_L4": "SCORE L4", "processor": "PROCESSOR", "net": "NET", "climb": "CLIMB", "defend": "DEFEND",
+              "align_score": "ALIGN"}
+
+
+def top_rig(game, width, height, hfov_deg=54.0):
+    """Field camera high behind the scoring table: the near field edge spans ~90 % of the width, the far wall clears
+    the scoreboard overlay (framing searched numerically for 1920x720)."""
+    fx = (width / 2) / np.tan(np.radians(hfov_deg / 2))
+    return {"name": "spectator", "world": True, "robot_to_camera": [game.mid[0], -14.25, 13.0, 0.0, 32.0, 90.0],
+            "capture": [width, height], "fx": fx, "fy": fx, "cx": width / 2, "cy": height / 2}
+
+
+def look_rig(eye, target, hfov_deg, size=TILE):
+    """World camera at eye looking at target (field frame, metres)."""
+    d = np.asarray(target, float) - np.asarray(eye, float)
+    yaw, pitch = np.degrees(np.arctan2(d[1], d[0])), np.degrees(np.arctan2(-d[2], np.hypot(d[0], d[1])))
+    fx = (size[0] / 2) / np.tan(np.radians(hfov_deg / 2))
+    return {"name": "follow", "world": True, "robot_to_camera": [*map(float, eye), 0.0, float(pitch), float(yaw)],
+            "capture": list(size), "fx": fx, "fy": fx, "cx": size[0] / 2, "cy": size[1] / 2}
+
+
+class FollowCam:
+    """Broadcast camera on a tripod outside the field (scoring-table side, raised) that pans and zooms to keep one
+    robot framed: the aim point follows the robot with a lag, the field of view shows ~`span` metres around it."""
+
+    def __init__(self, eye, span=3.6, tau=0.35, hfov=(12.0, 55.0)):
+        self.eye, self.span, self.tau, self.hfov = np.asarray(eye, float), span, tau, hfov
+        self.aim, self.robot = None, None
+
+    def rig(self, robot, xy, dt):
+        tgt = np.array([xy[0], xy[1], 0.55])
+        if self.aim is None or robot != self.robot:                 # new robot: cut, no swing across the field
+            self.aim, self.robot = tgt, robot
+        else:
+            self.aim = self.aim + (tgt - self.aim) * (1.0 - np.exp(-dt / self.tau))
+        dist = np.linalg.norm(self.aim - self.eye)
+        h = float(np.clip(np.degrees(2 * np.arctan(self.span / 2 / dist)), *self.hfov))
+        return look_rig(self.eye, self.aim, h)
+
+
+def follow_cams(game):
+    """Blue tile camera at the blue end of the scoring-table side, red at the red end (4.2 m up, 2.6 m off the wall)."""
+    L = game.length
+    return FollowCam([L * 0.30, -2.6, 4.2]), FollowCam([L * 0.70, -2.6, 4.2])
+
+
+def live_appearance(dr_values):
+    """Broadcast look: no crowd, dark arena, fixed light (keeps the rest of the domain-randomisation values)."""
+    return {**dr_values, "crowd_density": 0.0, "bg_rgb": [0.035, 0.04, 0.055], "sun_energy": 1.15, "sun_elev_deg": 62.0,
+            "sun_az_deg": 35.0, "sun_rgb": [1.0, 0.98, 0.95], "ambient_energy": 0.85, "ambient_rgb": [0.95, 0.96, 1.0],
+            "carpet_rgb": [0.27, 0.27, 0.28], "carpet_rough": 0.9}
+
+
+def live_state(snap, match_s, step, wins, pick, opponent, card=None, match_no=0, auto_s=15.0, endgame_s=20.0):
+    """JSON for the HTML overlay (/api/live): clock, phase, scores, category points, the robots in the tiles, and the
+    result card while it is shown."""
+    out = {"match": match_no, "step": int(step), "wins": list(wins), "red_name": "SAME NET" if opponent == "self" else "BASELINE",
+           "blue_name": "LEARNER", "card": None}
+    if card is not None:
+        scores, cats = card[0], card[1]
+        out["card"] = {"scores": [float(x) for x in scores], "cats": np.asarray(cats, float).round(1).tolist(),
+                       "winner": 0 if scores[0] > scores[1] else (1 if scores[1] > scores[0] else -1)}
+    if snap is None:
+        return out
+    t = float(snap["t"])
+    t_left = max(match_s - t, 0.0)
+    out.update(t_left=t_left, phase="AUTO" if t < auto_s else ("ENDGAME" if t_left <= endgame_s else "TELEOP"),
+               score=[float(x) for x in snap["score"]], cats=np.asarray(snap["cats"], float).round(1).tolist())
+    tiles = []
+    for r in (pick["blue"], pick["red"]):
+        st = snap["status"][r]
+        hold = "CORAL + ALGAE" if st["hold_coral"] and st["hold_algae"] else (
+            "CORAL" if st["hold_coral"] else ("ALGAE" if st["hold_algae"] else ""))
+        tiles.append({"robot": r + 1, "alliance": "blue" if r < 3 else "red", "ours": r == 0,
+                      "goal": "HANGING" if st["climbed"] else GOAL_LABEL.get(st["goal"], st["goal"].upper()),
+                      "hold": hold, "speed": round(float(st["speed_mps"]), 1)})
+    out["tiles"] = tiles
+    return out
+
+
 WHITE = (245, 245, 245)
 
 
-def top_rig(game, width, height, vfov_deg=46.0, hfov_deg=74.0):
-    fx = (width / 2) / np.tan(np.radians(hfov_deg / 2))
-    fy = (height / 2) / np.tan(np.radians(vfov_deg / 2))
-    return {"name": "spectator", "world": True, "robot_to_camera": [game.mid[0], -8.5, 11.0, 0.0, 41.0, 90.0],
-            "capture": [width, height], "fx": fx, "fy": fy, "cx": width / 2, "cy": height / 2}
+def text(img, s, x, y, scale=0.55, color=WHITE, thick=1):
+    """Plain status text on the robot page."""
+    cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA)
 
 
 def robot_rig(size=(640, 480)):
@@ -80,92 +158,6 @@ def project(points, cpos, crot, K, size):
     return fx * xc / zz + cx, fy * yc / zz + cy, zc
 
 
-def draw_bar(img, text, x, y, w, h, color, scale=0.7, thick=2):
-    import cv2
-    cv2.rectangle(img, (x, y), (x + w, y + h), color, -1)
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thick)
-    cv2.putText(img, text, (x + (w - tw) // 2, y + (h + th) // 2), cv2.FONT_HERSHEY_SIMPLEX, scale, WHITE, thick, cv2.LINE_AA)
-
-
-def text(img, s, x, y, scale=0.55, color=WHITE, thick=1):
-    import cv2
-    cv2.putText(img, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_8)
-
-
-_BAR_CACHE = {}
-
-
-def _bar_template(w, blue_name, red_name):
-    key = (w, blue_name, red_name)
-    if key not in _BAR_CACHE:
-        import cv2
-        base = np.zeros((62, w, 3), np.uint8)
-        cv2.rectangle(base, (0, 0), (w, 62), DARK, -1)
-        draw_bar(base, blue_name, 0, 0, 330, 30, BLUE, 0.55, 1)
-        cv2.rectangle(base, (0, 30), (330, 62), (255, 255, 255), -1)
-        draw_bar(base, red_name, w - 330, 0, 330, 30, RED, 0.55, 1)
-        cv2.rectangle(base, (w - 330, 30), (w, 62), (255, 255, 255), -1)
-        cv2.rectangle(base, (w // 2 - 70, 0), (w // 2 + 70, 62), (255, 255, 255), -1)
-        _BAR_CACHE[key] = base
-    return _BAR_CACHE[key]
-
-
-def scoreboard(img, score, t_left, step_text, blue_name="BLUE  learner", red_name="RED  baseline"):
-    """Top bar of the top view. score: (blue, red). Static parts are cached; numbers are drawn each frame."""
-    import cv2
-    w = img.shape[1]
-    img[:62] = _bar_template(w, blue_name, red_name)
-    cv2.putText(img, f"{score[0]:.0f}", (140, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.95, DARK, 2, cv2.LINE_8)
-    cv2.putText(img, f"{score[1]:.0f}", (w - 190, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.95, DARK, 2, cv2.LINE_8)
-    mm, ss = divmod(int(max(t_left, 0)), 60)
-    cv2.putText(img, f"{mm}:{ss:02d}", (w // 2 - 46, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.9, DARK, 2, cv2.LINE_8)
-    text(img, step_text, w // 2 - 120, 62 + 22, 0.6, WHITE, 1)
-
-
-def result_card(scores, cats, wins, step_text, blue="BLUE", red="RED"):
-    """1280x720 result card: per-category points table like the official post-match screen, no sponsor artwork."""
-    import cv2
-    img = np.full((720, 1280, 3), 235, np.uint8)
-    cv2.rectangle(img, (0, 0), (640, 720), BLUE, -1)
-    cv2.rectangle(img, (640, 0), (1280, 720), RED, -1)
-    head = "WINNER: BLUE" if scores[0] > scores[1] else ("WINNER: RED" if scores[1] > scores[0] else "TIE")
-    cv2.putText(img, head, (60, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.5, WHITE, 3, cv2.LINE_AA)
-    cv2.putText(img, f"{scores[0]:.0f}", (60, 330), cv2.FONT_HERSHEY_SIMPLEX, 5.0, WHITE, 8, cv2.LINE_AA)
-    cv2.putText(img, f"{scores[1]:.0f}", (700, 330), cv2.FONT_HERSHEY_SIMPLEX, 5.0, WHITE, 8, cv2.LINE_AA)
-    cv2.putText(img, blue, (60, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.1, WHITE, 2, cv2.LINE_AA)
-    cv2.putText(img, red, (700, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.1, WHITE, 2, cv2.LINE_AA)
-    # category table in a white panel centred between the two colours
-    rows = [("LEAVE", 0), ("CORAL", 1), ("ALGAE", 2), ("BARGE", 3), ("PENALTY", 4)]
-    cv2.rectangle(img, (400, 370), (880, 650), (255, 255, 255), -1)
-    for i, (label, k) in enumerate(rows):
-        y = 420 + i * 46
-        cv2.putText(img, f"{cats[0][k]:.0f}", (425, y), cv2.FONT_HERSHEY_SIMPLEX, 0.95, BLUE, 2, cv2.LINE_AA)
-        cv2.putText(img, label, (560, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (30, 30, 30), 2, cv2.LINE_AA)
-        txt = f"{cats[1][k]:.0f}"
-        (tw, _), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, 0.95, 2)
-        cv2.putText(img, txt, (855 - tw, y), cv2.FONT_HERSHEY_SIMPLEX, 0.95, RED, 2, cv2.LINE_AA)
-    cv2.putText(img, f"WINS  {wins[0]}", (60, 690), cv2.FONT_HERSHEY_SIMPLEX, 1.1, WHITE, 2, cv2.LINE_AA)
-    cv2.putText(img, f"WINS  {wins[1]}", (700, 690), cv2.FONT_HERSHEY_SIMPLEX, 1.1, WHITE, 2, cv2.LINE_AA)
-    cv2.putText(img, step_text, (420, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.9, WHITE, 2, cv2.LINE_AA)
-    return img
-
-
-def tile(img_cam, label, color, status_lines):
-    """Fit a 640x480 robot POV into a 640x320 tile (letterboxed) with a coloured label strip."""
-    import cv2
-    out = np.zeros((TILE[1], TILE[0], 3), np.uint8)
-    h = TILE[1] - 22
-    w = int(img_cam.shape[1] * h / img_cam.shape[0])
-    body = img_cam if img_cam.shape[:2] == (h, w) else cv2.resize(img_cam, (w, h))
-    x0 = (TILE[0] - w) // 2
-    out[22:, x0:x0 + w] = body
-    cv2.rectangle(out, (0, 0), (TILE[0], 22), color, -1)
-    cv2.putText(out, label, (8, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, WHITE, 1, cv2.LINE_AA)
-    for i, s in enumerate(status_lines[:2]):
-        text(out, s, 8, TILE[1] - 12 - 16 * i, 0.45, WHITE, 1)
-    return out
-
-
 class Broadcast:
     """Parent process: renders the broadcast and the robot page from snapshots sent by the simulation process.
 
@@ -185,6 +177,8 @@ class Broadcast:
         self.status = {}                              # robot id -> dict (for /api/robot)
         self.info = "starting"
         self.wins = [0, 0]
+        self.matches = 0
+        self.live = {"card": None, "match": 0, "wins": [0, 0], "step": 0}     # /api/live (HTML overlay)
         self.stop = False
         self.timing = {}                              # seconds per stage (diagnostics)
         self.ports = (48631, 48632, 48633)
@@ -294,13 +288,17 @@ class Broadcast:
         tags, tag_ids = tag_corners(game)
         rc_top = RenderClient(port=self.ports[0])     # separate Godot instances: same pid would share a port
         rc_top.configure(game, [top_rig(game, *self.top_size)], n_envs=1, width=self.top_size[0],
-                         height=self.top_size[1], max_cams=1, msaa=2, visual="hi")
-        rc_pov = RenderClient(port=self.ports[1])
-        rc_pov.configure(game, [robot_rig(TILE_RENDER)], n_envs=1, width=TILE_RENDER[0], height=TILE_RENDER[1],
-                         max_cams=2, msaa=0, visual="hi")
+                         height=self.top_size[1], max_cams=1, msaa=1, fxaa=True, visual="hi")
+        rc_pov = RenderClient(port=self.ports[1])                 # the two follow cameras
+        follow = follow_cams(game)
+        rc_pov.configure(game, [look_rig(f.eye, [game.mid[0], game.mid[1], 0.5], 40.0) for f in follow], n_envs=1,
+                         width=TILE[0], height=TILE[1], max_cams=2, msaa=1, fxaa=True, visual="hi")
+        t_prev = time.time()
         rc_robot = None                               # 640x480 client, started only when the robot page is open
         full_cam = robot_rig(self.pov_size)
         canvas = np.zeros((CANVAS[1], CANVAS[0], 3), np.uint8)
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(2)
         clients = [rc_top, rc_pov]
         try:
             appearance = None                         # set by each new match (robot page client uses it too)
@@ -318,6 +316,7 @@ class Broadcast:
                     msg = self._conn.recv()
                     if msg["kind"] == "match":
                         appearance = msg["appearance"]
+                        self.matches += 1
                         rc_top.set_appearance(0, *appearance)
                         rc_pov.set_appearance(0, *appearance)
                         if rc_robot is not None:
@@ -337,10 +336,10 @@ class Broadcast:
                     time.sleep(0.2)
                     continue
                 if card is not None:
-                    if time.time() < card[2]:
-                        self._publish("bc", result_card(card[0], card[1], self.wins,
-                                                        f"training step {self.training_step() / 1e6:.1f}M"))
-                        time.sleep(max(0.0, 1.0 / FPS - (time.time() - t_frame)))
+                    if time.time() < card[2]:                     # result card: an overlay on the page, no 3D needed
+                        self.live = live_state(None, self.match_s, self.training_step(), self.wins, pick, self.opponent,
+                                               card, self.matches)
+                        time.sleep(0.1)
                         continue
                     card = None
                 if latest is None:
@@ -356,19 +355,21 @@ class Broadcast:
                 if time.time() >= pick["next"]:
                     pick.update(blue=int(self.rng.integers(0, 3)), red=int(self.rng.integers(3, 6)),
                                 next=time.time() + TILE_CHANGE_S)
-                img_top, _ = rc_top.render(state, [(0, 0, 0)])
-                img_pov, _ = rc_pov.render(state, [(0, pick["blue"], 0), (0, pick["red"], 0)])
-                top = cv2.cvtColor(img_top[0], cv2.COLOR_RGB2BGR)
-                scoreboard(top, latest["score"], self.match_s - latest["t"], f"training step {self.training_step() / 1e6:.1f}M",
-                          red_name="RED  same net" if self.opponent == "self" else "RED  baseline")
-                canvas[:TOP[1]] = top
-                canvas[TOP[1]:, :640] = tile(cv2.cvtColor(img_pov[0], cv2.COLOR_RGB2BGR),
-                                             f"BLUE  robot {pick['blue'] + 1}", BLUE,
-                                             self._lines(latest, pick["blue"]))
-                canvas[TOP[1]:, 640:] = tile(cv2.cvtColor(img_pov[1], cv2.COLOR_RGB2BGR),
-                                             f"RED  robot {pick['red'] + 1}", RED,
-                                             self._lines(latest, pick["red"]))
-                self._publish("bc", canvas)
+                now = time.time()
+                dt, t_prev = min(now - t_prev, 0.2), now
+                rob = state["robots"][0]
+                rigs = [follow[0].rig(pick["blue"], rob[pick["blue"], :2], dt), follow[1].rig(pick["red"], rob[pick["red"], :2], dt)]
+                # the two Godot instances render in parallel (the wait is mostly readback and transfer)
+                f_top = pool.submit(rc_top.render, state, [(0, 0, 0)])
+                f_pov = pool.submit(rc_pov.render, state, [(0, pick["blue"], 0), (0, pick["red"], 1)], rigs=rigs)
+                img_top, _ = f_top.result()
+                img_pov, _ = f_pov.result()
+                canvas[:TOP[1]] = cv2.cvtColor(img_top[0], cv2.COLOR_RGB2BGR)
+                canvas[TOP[1]:, :TILE[0]] = cv2.cvtColor(img_pov[0], cv2.COLOR_RGB2BGR)
+                canvas[TOP[1]:, TILE[0]:] = cv2.cvtColor(img_pov[1], cv2.COLOR_RGB2BGR)
+                self._publish("bc", canvas, quality=88)
+                self.live = live_state(latest, self.match_s, self.training_step(), self.wins, pick, self.opponent,
+                                       None, self.matches)
                 frame_idx += 1
                 if self.viewers["robot"] > 0 and frame_idx % 2 == 0:       # robot page at 15 fps
                     if rc_robot is None:
@@ -389,12 +390,6 @@ class Broadcast:
                     rc.close()                        # no orphan Godot processes after a stop or crash
                 except Exception:
                     pass
-
-    def _lines(self, snap, r):
-        st = snap["status"][r]
-        hold = "coral" if st["hold_coral"] else ("algae" if st["hold_algae"] else "-")
-        return [f"goal {st['goal']}   hold {hold}",
-                f"speed {st['speed_mps']:.1f} m/s   batt {st['battery_v']:.1f} V"]
 
     def _overlay_robot(self, cam, snap, tags, tag_ids):
         """Tags the detector sees (green) and the status panel. Projection uses the camera pose from the child."""

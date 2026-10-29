@@ -63,7 +63,8 @@ class RenderClient:
         protocol.send(self.sock, header, blob)
         return protocol.recv(self.sock)
 
-    def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto", msaa=0):
+    def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto", msaa=0,
+                  fxaa=False):
         """visual: "auto" (CAD model if game/<year>/visual/field.glb exists), "cad", "hi" (the detailed field_hi.glb when
         present, for the live view; else as "auto"), "proxy" (procedural), or a path to a .glb."""
         IN = 0.0254
@@ -84,7 +85,7 @@ class RenderClient:
         h, _ = self._call({
             "type": "configure", "version": protocol.VERSION, "n_envs": n_envs, "width": width, "height": height,
             "max_cams": max_cams, "scene": game.scene(cad=use_cad), "rigs": self.rigs, "tag_bits": bits,
-            "visual_glb": str(glb) if use_cad else "", "msaa": int(msaa),
+            "visual_glb": str(glb) if use_cad else "", "msaa": int(msaa), "fxaa": bool(fxaa),
             "pieces": {"mc": game.kc + 6 + game.branch_pose[..., 0].size + game.l1_pose[..., 0].size,   # floor, held, branches, trough
                        "ma": game.ka + 6 + game.reef_algae_pose[..., 0].size, "coral_od": pc["coral"]["od"] * IN, "coral_len": pc["coral"]["length"] * IN,
                        "algae_d": pc["algae"]["diameter"] * IN, "cage_size": f["cages"]["size"] * IN,
@@ -96,9 +97,11 @@ class RenderClient:
         h, _ = self._call({"type": "appearance", "env": env, "robots": robots, "dr": dr, "field": self.field})
         assert h["type"] == "ok"
 
-    def render(self, state: dict, cams: list, post=None, check=False, markers=None):
+    def render(self, state: dict, cams: list, post=None, check=False, markers=None, rigs=None):
         """state: VecSim.render_state() (all envs). cams: [(env, robot, rig_index)].
-        post: [(gain, noise, blur_dx_px, blur_dy_px, seed)] per camera. Returns (K,H,W,3) uint8, header."""
+        post: [(gain, noise, blur_dx_px, blur_dy_px, seed)] per camera. rigs: optional camera dicts (as for
+        configure) replacing the configured rig of each camera for this render (None keeps it).
+        Returns (K,H,W,3) uint8, header."""
         arrays = {k: state[k] for k in ("robots", "coral", "algae", "cages")}
         if "mech" in state:                              # 254 mechanism geometry (per robot solids), optional
             arrays["mech"] = state["mech"]
@@ -107,8 +110,11 @@ class RenderClient:
         meta, blob = protocol.pack_arrays(arrays)
         post = post if post is not None else [(1.0, 0.0, 0.0, 0.0, 0.0)] * len(cams)
         self.frame += 1
-        h, data = self._call({"type": "render", "frame": self.frame, "cams": [list(map(int, c)) for c in cams],
-                              "post": [list(map(float, p)) for p in post], "check": bool(check), "arrays": meta}, blob)
+        msg = {"type": "render", "frame": self.frame, "cams": [list(map(int, c)) for c in cams],
+               "post": [list(map(float, p)) for p in post], "check": bool(check), "arrays": meta}
+        if rigs is not None:
+            msg["rig_override"] = [rig_dict(r) if r is not None else None for r in rigs]
+        h, data = self._call(msg, blob)
         cols, rows = h["atlas"]
         img = np.frombuffer(data, np.uint8).reshape(rows, self.H, cols, self.W, 3).transpose(0, 2, 1, 3, 4)
         img = img.reshape(rows * cols, self.H, self.W, 3)[: h["n"]]

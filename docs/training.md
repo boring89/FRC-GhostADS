@@ -65,8 +65,21 @@ the teacher observation (`others`, now 36 features; opponents get zeros). Weight
 
 ## Live views (ghosttrain/broadcast.py, ghosttrain/dashboard.py)
 `uv run python -m ghosttrain.dashboard runs/teacher3` then
-- http://localhost:8777/live : broadcast 1280x720 (field view + two robot POVs, red/blue scoreboard, training step, 10 s result card)
+- http://localhost:8777/live : broadcast 1920x1080 (field camera + two follow cameras, official-style overlay, result card)
 - http://localhost:8777/robot?id=N : one robot POV (640x480) with the AprilTags the detector sees and the robot status
+
+Live view, current version (supersedes the 1280x720 numbers below):
+- Video 1920x1080, every view rendered 1:1: field camera 1920x720 high behind the scoring table (54 deg lens, 14 m back,
+  13 m up, 32 deg down; framing searched so the near edge fills ~90 % of the width), and two 960x360 follow cameras on
+  tripods outside the field (scoring-table side, 4.2 m up) that pan to a BLUE / RED robot with a lag and zoom to keep
+  ~3.6 m around it (re-picked every 10 s). MSAA 2x + FXAA (`fxaa` in the renderer configure), detailed field_hi.glb.
+- No crowd, dark background, fixed lighting (`broadcast.live_appearance`); training cameras keep their randomisation.
+- The scoreboard (alliance names, scores, clock, AUTO / TELEOP / ENDGAME, CORAL / ALGAE / BARGE points), tile labels
+  (robot, goal, held piece, speed) and the result card (totals, LEAVE / CORAL / ALGAE / BARGE / PENALTY, winner, wins)
+  are an HTML overlay (`ghosttrain/live_page.py`) fed by `/api/live` (`broadcast.live_state`), not pixels in the video.
+- The two Godot instances render in parallel; the static part of each robot model is cached (mechanism 3 ms / frame).
+  Measured (GTX 1070, no training running): 27.8 fps (MSAA 4x: 24.9, serial renders: 18.2). Per frame the field view
+  costs ~12 ms of GPU render + readback in Godot and ~8 ms to move the 4 MB raw image to Python.
 
 Rendering happens only while a page is open. Default parallel sim processes: 6 (`TrainCfg.n_procs`).
 Architecture: the match simulation runs in its own process (`ghosttrain/broadcast_sim.py`, policy on CPU) and sends a

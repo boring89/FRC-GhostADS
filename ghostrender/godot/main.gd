@@ -179,6 +179,8 @@ func configure(h: Dictionary) -> void:
 		var vp := SubViewport.new()
 		vp.size = Vector2i(W, H)
 		vp.msaa_3d = [Viewport.MSAA_DISABLED, Viewport.MSAA_2X, Viewport.MSAA_4X, Viewport.MSAA_8X][clampi(int(h.get("msaa", 0)), 0, 3)]
+		if bool(h.get("fxaa", false)):                # softer edges for the live view (thin pipes, nets, rails)
+			vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
 		vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		var cam := Camera3D.new()
 		cam.projection = Camera3D.PROJECTION_FRUSTUM
@@ -506,7 +508,11 @@ func render(h: Dictionary, blob: PackedByteArray) -> void:
 		var e: Dictionary = envs[int(req[0])]
 		var vp: SubViewport = cam_d["vp"]
 		vp.world_3d = e["world"]
-		setup_camera(cam_d["cam"], a["robots"], int(req[0]), int(req[1]), rigs[int(req[2])])
+		var rig_j: Dictionary = rigs[int(req[2])]
+		var ov: Array = h.get("rig_override", [])          # per-render camera (e.g. a broadcast camera tracking a robot)
+		if j < ov.size() and ov[j] != null:
+			rig_j = ov[j]
+		setup_camera(cam_d["cam"], a["robots"], int(req[0]), int(req[1]), rig_j)
 		var pp: Array = h["post"][j]
 		var sm: ShaderMaterial = cam_d["mat"]
 		sm.set_shader_parameter("raw", check)

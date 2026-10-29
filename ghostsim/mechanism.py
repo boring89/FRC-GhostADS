@@ -206,7 +206,11 @@ def chute_angle(half=PERIMETER_HALF):
 def pose(h=0.0, wrist=0.0, arm=60.0, climb=95.0, hold=None, alliance=0, frame=FRAME, funnel=None):
     """All solids for one configuration. hold: None | 'coral' | 'algae' | 'both'. funnel: None or chute position
     0..1 of a coral sliding down the funnel. frame: frame outer size (m) of this robot."""
-    h = float(np.clip(h, 0.0, H_MAX))
+    return pose_static(alliance, frame) + pose_moving(h, wrist, arm, climb, hold, frame, funnel)
+
+
+def pose_static(alliance=0, frame=FRAME):
+    """Solids that never move relative to the robot (drivebase, bumpers, outer stage, funnel): cacheable."""
     half = frame / 2
     out = []
     # ---- drivebase
@@ -227,13 +231,38 @@ def pose(h=0.0, wrist=0.0, arm=60.0, climb=95.0, hold=None, alliance=0, frame=FR
     for s in (-1, 1):
         out.append(_box("bumper", bc, [s * (ho - BUMPER_T / 2), 0, bz], [BUMPER_T, 2 * ho, bh]))
         out.append(_box("bumper", bc, [0, s * (ho - BUMPER_T / 2), bz], [2 * ho - 2 * BUMPER_T, BUMPER_T, bh]))
-    # ---- elevator: three nested stages (cascade) and the carriage
-    for name, ck, x, y, z0, z1, k in STAGES:
-        e = k * h
-        w = 0.05 if name == "outer" else 0.035
-        for s in (-1, 1):
-            out.append(_box(name, COL[ck], [x, s * y, (z0 + z1) / 2 + e], [w, w, z1 - z0]))
-        out.append(_box(name, COL[ck], [x, 0, z1 - w / 2 + e], [w, 2 * y + w, w]))
+    # ---- elevator outer stage (fixed)
+    out += _stage(STAGES[0], 0.0)
+    # ---- funnel at the back (chute + side walls + supports)
+    Rf = rot_y(chute_angle(half))
+    top = np.array([funnel_top_x(half), 0.0, FUNNEL_TOP_Z])
+    bot = np.array([FUNNEL_BOT[0], 0.0, FUNNEL_BOT[1]])
+    out.append(_box("funnel", COL["funnel"], (top + bot) / 2, [float(np.linalg.norm(bot - top)), 0.38, 0.01], Rf))
+    wz0, wz1 = bot[2] - 0.02, FUNNEL_TOP_Z + FUNNEL_WALL / 2               # vertical side walls of the hopper
+    for s in (-1, 1):
+        out.append(_box("funnel_wall", COL["funnel"], [(top[0] + bot[0]) / 2, s * 0.195, (wz0 + wz1) / 2],
+                        [bot[0] - top[0], 0.01, wz1 - wz0]))
+    for s in (-1, 1):
+        out.append(_box("funnel_post", COL["inner"], [top[0] + 0.03, s * 0.17, (0.125 + wz0) / 2], [0.025, 0.025, wz0 - 0.125]))
+    return out
+
+
+def _stage(st, h):
+    name, ck, x, y, z0, z1, k = st
+    e, w = k * h, (0.05 if name == "outer" else 0.035)
+    out = [_box(name, COL[ck], [x, s * y, (z0 + z1) / 2 + e], [w, w, z1 - z0]) for s in (-1, 1)]
+    out.append(_box(name, COL[ck], [x, 0, z1 - w / 2 + e], [w, 2 * y + w, w]))
+    return out
+
+
+def pose_moving(h=0.0, wrist=0.0, arm=60.0, climb=95.0, hold=None, frame=FRAME, funnel=None):
+    """Solids that follow the joints, and the game pieces."""
+    h = float(np.clip(h, 0.0, H_MAX))
+    half = frame / 2
+    out = []
+    # ---- elevator: inner stages (cascade) and the carriage
+    for st in STAGES[1:]:
+        out += _stage(st, h)
     zc = carriage_z(h)
     for s in (-1, 1):
         out.append(_box("carriage", COL["carriage"], [0.11, s * 0.12, zc + CARRIAGE_LEN / 2], [0.02, 0.06, CARRIAGE_LEN]))
@@ -244,21 +273,6 @@ def pose(h=0.0, wrist=0.0, arm=60.0, climb=95.0, hold=None, alliance=0, frame=FR
     for s in (-1, 1):
         out.append(_box("disp_side", COL["disp"], P + Rw @ [DISP_LEN / 2, s * 0.17, 0.06], [DISP_LEN, 0.01, 0.12], Rw))
     out.append(_cyl_y("disp_roller", COL["roller"], P + Rw @ [DISP_LEN - 0.02, 0, 0.13], 0.025, 0.33, Rw))
-    # ---- funnel at the back (chute + side walls + supports)
-    ang = chute_angle(half)
-    Rf = rot_y(ang)
-    top = np.array([funnel_top_x(half), 0.0, FUNNEL_TOP_Z])
-    bot = np.array([FUNNEL_BOT[0], 0.0, FUNNEL_BOT[1]])
-    L = float(np.linalg.norm(bot - top))
-    mid = (top + bot) / 2
-    nrm = Rf @ np.array([0.0, 0.0, 1.0])
-    out.append(_box("funnel", COL["funnel"], mid, [L, 0.38, 0.01], Rf))
-    wz0, wz1 = bot[2] - 0.02, FUNNEL_TOP_Z + FUNNEL_WALL / 2               # vertical side walls of the hopper
-    for s in (-1, 1):
-        out.append(_box("funnel_wall", COL["funnel"], [(top[0] + bot[0]) / 2, s * 0.195, (wz0 + wz1) / 2],
-                        [bot[0] - top[0], 0.01, wz1 - wz0]))
-    for s in (-1, 1):
-        out.append(_box("funnel_post", COL["inner"], [top[0] + 0.03, s * 0.17, (0.125 + wz0) / 2], [0.025, 0.025, wz0 - 0.125]))
     # ---- algae arm at the front: two bars, two rollers
     Ra = rot_y(arm)
     ap = arm_pivot(half)
@@ -275,7 +289,7 @@ def pose(h=0.0, wrist=0.0, arm=60.0, climb=95.0, hold=None, alliance=0, frame=FR
     if hold in ("coral", "both"):
         out.append(_cyl_y("coral", COL["coral"], coral_held(h, wrist), CORAL_R, CORAL_LEN, Rw))
     if funnel is not None:
-        out.append(_cyl_y("coral", COL["coral"], funnel_point(funnel, half), CORAL_R, CORAL_LEN, Rf))
+        out.append(_cyl_y("coral", COL["coral"], funnel_point(funnel, half), CORAL_R, CORAL_LEN, rot_y(chute_angle(half))))
     if hold in ("algae", "both"):
         out.append(Sphere("algae", COL["algae"], ball_in_arm(arm, half), ALGAE_R))
     return out
@@ -338,11 +352,17 @@ _MX = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]])    # field-
 
 
 def slots_for(solids):
-    """Robot-local solids -> (SLOTS, SLOT_W) float32 in Godot axes (unused slots have visible = 0).
-    Boxes and cylinders: half sizes along the local axes in Godot order (x, z, y) -> a Godot CylinderMesh (axis Y)
-    takes the solid's local z as its axis."""
+    """Robot-local solids -> (SLOTS, SLOT_W) float32 in Godot axes (unused slots have visible = 0)."""
     out = np.zeros((SLOTS, SLOT_W), np.float32)
     assert len(solids) <= SLOTS, len(solids)
+    out[:len(solids)] = solid_rows(solids)
+    return out
+
+
+def solid_rows(solids):
+    """Robot-local solids -> (k, SLOT_W) float32 renderer rows in Godot axes. Boxes and cylinders: half sizes along
+    the local axes in Godot order (x, z, y) -> a Godot CylinderMesh (axis Y) takes the solid's local z as its axis."""
+    out = np.zeros((len(solids), SLOT_W), np.float32)
     for i, s in enumerate(solids):
         out[i, 0] = 1.0
         out[i, 2:5] = _MX @ s.center

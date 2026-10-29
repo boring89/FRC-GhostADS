@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .mechanism import ARM, SLOT_W, SLOTS, STOW, coral_target, pose, slots_for
+from .mechanism import ARM, SLOT_W, SLOTS, STOW, coral_target, pose_moving, pose_static, solid_rows
 
 JOINTS = ("h", "wrist", "arm", "climb")
 RATE = np.array([3.0, 300.0, 360.0, 120.0])        # m/s, deg/s, deg/s, deg/s
@@ -101,11 +101,20 @@ class JointTracker:
         return {"q": self.q.copy(), "hold": list(self.hold), "funnel": list(self.funnel)}
 
 
+_STATIC: dict = {}
+
+
 def mech_slots(q, hold, funnel, frames, n=6):
-    """(1, R, SLOTS, SLOT_W) renderer array from joint values (e.g. interpolated between two ticks)."""
+    """(1, R, SLOTS, SLOT_W) renderer array from joint values (e.g. interpolated between two ticks). The static part of
+    each robot (drivebase, bumpers, outer stage, funnel) is computed once per frame size and alliance."""
     out = np.zeros((1, n, SLOTS, SLOT_W), np.float32)
     for r in range(n):
+        key = (0 if r < 3 else 1, round(float(frames[r]), 5))
+        if key not in _STATIC:
+            _STATIC[key] = solid_rows(pose_static(key[0], frames[r]))
+        st = _STATIC[key]
         h, w, a, c = q[r]
-        out[0, r] = slots_for(pose(h=h, wrist=w, arm=a, climb=c, hold=hold[r], alliance=0 if r < 3 else 1,
-                                   frame=frames[r], funnel=funnel[r]))
+        mv = solid_rows(pose_moving(h, w, a, c, hold[r], frames[r], funnel[r]))
+        out[0, r, :len(st)] = st
+        out[0, r, len(st):len(st) + len(mv)] = mv
     return out

@@ -78,15 +78,7 @@ tick();setInterval(tick,5000);
 </script></body></html>"""
 
 
-BROADCAST_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>GhostADS live</title><style>
-html,body{margin:0;height:100%;background:#000;overflow:hidden}
-img{width:100vw;height:100vh;object-fit:contain;display:block}
-</style></head><body>
-<img id="s" src="/stream.mjpg">
-<script>
-const tg=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
-addEventListener("keydown",e=>{if(e.key=="f"||e.key=="F")tg()});addEventListener("dblclick",tg);
-</script></body></html>"""
+from .live_page import LIVE_PAGE as BROADCAST_PAGE  # noqa: E402  (official-style overlay on the video)
 
 ROBOT_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>GhostADS robot view</title><style>
 body{margin:0;background:#15171b;color:#ddd;font:14px sans-serif}
@@ -173,6 +165,8 @@ def make_handler(run: Path, bc: Broadcast | None):
             elif path == "/api/status":
                 self._send(json.dumps({"live": bc.info if bc else "live view disabled (--no-live)",
                                        "viewers": bc.viewers if bc else {}, "wins": bc.wins if bc else []}).encode())
+            elif path == "/api/live":
+                self._send(json.dumps(bc.live if bc else {"card": None}).encode())
             elif path == "/api/robot" and bc:
                 r = int(params.get("id", 0))
                 self._send(json.dumps(bc.status.get(r, {"robot": r + 1, "note": "no data yet"})).encode())

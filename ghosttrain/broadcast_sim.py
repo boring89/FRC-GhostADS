@@ -97,8 +97,9 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
         w.set_ctrl(np.array([[False, opponent == "baseline"]]))
         o = w.reset()
         sim = w.sim
+        from .broadcast import live_appearance
         appearance = (dr.sample_appearance(rng, sim.prm.half[0], sim.prm.height[0], sim.ours["bumper_z_m"]),
-                      {**dr.sample_dr(rng), "crowd_density": 0.6})
+                      live_appearance(dr.sample_dr(rng)))
         conn.send({"kind": "match", "appearance": appearance})
         goal = np.zeros((1, R), int)
         res = {"done": np.array([False])}
