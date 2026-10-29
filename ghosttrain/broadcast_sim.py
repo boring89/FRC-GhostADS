@@ -125,7 +125,7 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
                 with torch.no_grad():
                     logits, mu, _ = net(t)
                     goal = torch.distributions.Categorical(logits=logits).sample().numpy().reshape(1, R)
-                    stick = np.clip((mu + net.log_std.exp() * torch.randn_like(mu)).numpy().reshape(1, R, 3), -1, 1)
+                    stick = np.clip((mu + net.stick_log_std().exp() * torch.randn_like(mu)).numpy().reshape(1, R, 3), -1, 1)
                 res = w.step(stick, goal)
                 o = res["obs"]
                 joints.update(*mech_inputs(sim), dt=TICK_S)

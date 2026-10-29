@@ -39,7 +39,7 @@ def main() -> int:
         ok &= bool(cond)
         print(f"  {'OK ' if cond else 'BAD'} {name} {detail}")
 
-    check("all losses finite", all(np.isfinite([r["pg"], r["vf"], r["ent_goal"], r["kl"]]).all() for r in rows))
+    check("all losses finite", all(np.isfinite([r["pg_stick"], r["pg_goal"], r["vf"], r["ent_goal"], r["kl"]]).all() for r in rows))
     check("throughput", rows[-1]["sps"] > 1500, f"{rows[-1]['sps']:.0f} agent-steps/s")
     check("critic learns (explained variance > 0)", max(r["expl_var"] for r in rows) > 0.0, f"max {max(r['expl_var'] for r in rows):.2f}")
     if a.init:

@@ -63,7 +63,7 @@ def record(net_path, matches=10, opponent="baseline", seed=0, device="cuda", det
             t["glob"] = torch.from_numpy(o["glob"]).to(dev)[:, ALLIANCE].reshape(N * R, -1)
             logits, mu, _ = net(t)
             g = logits.argmax(-1) if deterministic else torch.distributions.Categorical(logits=logits).sample()
-            s = mu if deterministic else mu + net.log_std.exp() * torch.randn_like(mu)
+            s = mu if deterministic else mu + net.stick_log_std().exp() * torch.randn_like(mu)
             stick, goal = np.clip(s.cpu().numpy().reshape(N, R, 3), -1, 1), g.cpu().numpy().reshape(N, R)
         frames.append({k: v.copy() for k, v in w.sim.render_state().items()})
         scores.append(w.sim.score.copy()); times.append(w.sim.t.copy())

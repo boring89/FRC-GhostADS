@@ -5,9 +5,9 @@ Everything runs on the P520: 12 sim worker processes (CPU) + the learner on the 
 
 ## Pipeline
 ```
-uv run python -m ghosttrain.bc --rounds 120 --out runs/bc2           # 1. clone the rule-based baseline (~10 min)
-uv run python -m ghosttrain.train --init runs/bc2/bc_net.pt --lr 1e-4 --ent_goal 0.003 \
-        --iters 2000 --out runs/teacher --snapshot_every 25           # 2. MAPPO self-play + league
+uv run python -m ghosttrain.bc --out runs/bc9                        # 1. clone the baseline with DAgger (~30 min)
+sh tools/run_forever.sh runs/bc9/bc_net.pt runs/teacher8              # 2. MAPPO self-play + league, restarts on crashes
+# (or one bounded run: uv run python -m ghosttrain.train --init runs/bc9/bc_net.pt --iters 2000 --out runs/teacher)
 uv run python -m ghosttrain.evaluate runs/teacher/latest_net.pt --episodes 200   # 3. win rate vs baseline, both colours
 uv run python -m ghosttrain.replay runs/teacher/latest_net.pt --matches 10 --out runs/teacher/replays   # 4. videos + audit
 ```
@@ -240,6 +240,41 @@ Checked against the 2025 manual section 7 (V11).
   Baseline vs baseline score 127.5 -> 122.6 per alliance; the solo calibration of robots/others.json is unchanged
   within noise (0.30 / 0.36 / 0.60 / 0.75 / 0.94).
 
+## Optimisation fixes for teacher8 (2026-10-29; teacher5-7 plateaued after ~iter 500)
+Measured on teacher7 (iter 6060): the stick log std had collapsed -1.6 -> -4.2, ~25 % of PPO samples were clipped,
+all by the stick ratio (the joint goal x stick ratio hid the goal head behind it), the actor gradient norm was ~11
+against max_grad 0.5 (every update scaled by ~0.05), the goal entropy bonus was averaged over decide ticks while the
+policy loss was averaged over all ticks (10x relative weight: goal entropy rose 0.33 -> 1.35), and the learner was
+always blue = always with our robot (self-play blue won ~70 %, the baseline win rate was biased). Changes:
+- Stick std: soft floor at 0.03 (`net.LOG_STD_MIN`, `TeacherNet.stick_log_std()`, identity well above it); a warm
+  start begins at 0.05 (`init_log_std`). Not more: scoring needs the robot stopped (<= 0.3 m/s) and stick noise costs
+  points. bc9 vs the baseline (96 matches each): deterministic 117-116, std 0.05 131-117, 0.10 107-120, 0.20 31-116
+  (0.20 = the old BC start, which is why the first calibration run scored ~20 per match).
+- PPO: one clipped surrogate per head (`clip` for the stick on every tick, `clip_goal` for the goal on decide ticks),
+  each averaged over its own samples; goal entropy averaged over decide ticks too, `ent_goal` 0.005 per decision.
+- Gradients: actor and critic clipped separately (`max_grad` 5, `max_grad_critic` 2, so only outliers are cut);
+  the pre-clip norms are logged (`gn_actor`, `gn_critic`) and the dashboard plots them. With Adam a constant clip
+  factor does not shrink the steps (it normalises per parameter), so "updates scaled by 0.05" overstated it; what
+  the joint clip did do was let critic spikes shrink the actor's step in the same minibatch.
+- Memory: gradients are accumulated over micro-batches of 2048 (`micro`, same update as one 8192 minibatch): the
+  8192 forward pass ran out of GPU memory with the desktop apps holding ~2.7 GB.
+- Sides: the learner's alliance is drawn per episode (`side_swap`); the baseline / pool snapshot plays the other one.
+  Stats are from the learner's side (`score_learner`, `score_opp`) and the baseline win rate is split by whether our
+  robot (slot 0, blue) was on the learner's side (`win_baseline_with_ours` / `_without_ours`).
+- League: the warm start stays in the pool as an anchor (never evicted), pool 8, snapshot every 25 iterations.
+- Learning rates per part: actor encoder / trunk / stick head 2e-5, goal head 1e-4, critic 1e-4. With the stick std
+  at 0.05, one Adam step at 1e-4 moved the stick distribution by KL 0.1-0.5 (a 10x smaller rate on the stick head
+  alone did not help: the shared trunk moves it); at 2e-5 the stick KL is ~0.007 per iteration. On top, the actor
+  stops for the rest of an iteration once a minibatch exceeds 1.5 x `target_kl` (0.02); the critic keeps training
+  (`actor_frac` = share of minibatches that moved the actor).
+- `tools/run_forever.sh <bc_net.pt> <out>` starts a fresh run with `--init` and resumes from the newest snapshot after
+  a crash; extra arguments go to `ghosttrain.train`.
+- Behaviour cloning with DAgger (`ghosttrain/bc.py`, runs/bc9): bc8, cloned from baseline-driven data only, scored 24
+  vs 112 with goal accuracy 0.996: the observation holds the filtered stick (chassis filter state) and the net learned
+  to copy it (mean |stick| 0.07 vs the baseline's 0.23 on its own states; robots stalled 0.3-3 m short of targets).
+  From round 30 on, a growing share of envs (up to 80 %) is driven by the net while the baseline labels every robot
+  (`label_all` in the workers); the last 3 rounds are trained together. bc9: 117 vs 116 deterministic.
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.
@@ -247,6 +282,6 @@ Checked against the 2025 manual section 7 (V11).
   initialised correctly, 6/8 runs reached the estimated alignment and the true distance was 6-13 cm: the 5 cm branch
   tolerance is not reliably met from the estimate. Training runs with sensors off (true pose); the live broadcast
   (sensors on) therefore shows scoring misses that training does not have.
-- Goal entropy rises during PPO (0.07 -> 1.5). `ent_goal` 0.01 is probably too high; use 0.003 and compare.
+- Goal entropy rose during PPO (0.07 -> 1.5) with the old per-tick averaging: see "Optimisation fixes for teacher8".
 - The baseline's own fouls and stuck behaviour limit the BC start; league self-play should move past it.
 - Shaping targets come from the baseline's plan (potential-based, so it does not change the optimal policy in theory).

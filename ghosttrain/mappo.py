@@ -4,6 +4,11 @@
 - goal head decides once per second (DECIDE_EVERY ticks), stick head every tick
 - opponents per env: SELF (both alliances learn), BASELINE (rule-based, driven inside the worker) or a frozen
   POOL snapshot; the opponent of an episode is re-drawn at every reset with PFSP weights
+- the learner's alliance is drawn per episode (side_swap): our robot (slot 0) is on the learner's side or on the
+  opponent's half of the time, so the win rates are not biased by it (teacher5-7: learner always blue = always with
+  our robot, self-play blue won ~70 %)
+- PPO with one clipped surrogate per head (stick every tick, goal on decide ticks only, each averaged over its own
+  samples); actor and critic gradients clipped separately; soft floor on the stick std (net.LOG_STD_MIN)
 """
 from __future__ import annotations
 
@@ -30,19 +35,30 @@ class TrainCfg:
     horizon: int = 64
     epochs: int = 3
     minibatch: int = 8192
-    lr: float = 3e-4
+    micro: int = 2048               # gradient accumulation chunk (memory only: same update as one 8192 minibatch)
+    lr: float = 2e-5                # actor (encoder, trunk, stick head). The stick std is small (0.05): one Adam
+                                    # step at 1e-4 moved the stick distribution by KL 0.1-0.5 (also with a 10x
+                                    # smaller rate on the stick head alone: the shared trunk moves it); at 2e-5 the
+                                    # KL is ~0.007 per iteration with every minibatch used
+    lr_goal: float = 1e-4           # goal head (last layer: moves only the goal logits)
+    lr_critic: float = 1e-4         # critic (reads a detached embedding: cannot move the actor)
     gamma: float = GAMMA
     lam: float = 0.95
-    clip: float = 0.2
+    clip: float = 0.2               # stick ratio
+    clip_goal: float = 0.2          # goal ratio (decide ticks)
     vf_coef: float = 0.5
-    ent_goal: float = 0.01
+    ent_goal: float = 0.005         # per decision (the goal loss and entropy are both averaged over decide ticks)
+    target_kl: float = 0.02         # actor updates of an iteration stop once a minibatch's KL exceeds 1.5x this
+                                    # (the critic keeps training); the stick std is small, so its ratio moves fast
     ent_stick: float = 0.001
-    max_grad: float = 0.5
+    max_grad: float = 5.0           # actor gradient norm (clips outliers only; measured norms are logged)
+    max_grad_critic: float = 2.0    # critic gradient norm
     shape_w0: float = 1.0
     shape_anneal_iters: int = 1500
     p_self: float = 0.35
-    pool_size: int = 6
-    snapshot_every: int = 100
+    side_swap: bool = True          # learner alliance drawn per episode
+    pool_size: int = 8
+    snapshot_every: int = 25
     d: int = 64
     device: str = "cuda"
     seed: int = 0
@@ -50,6 +66,7 @@ class TrainCfg:
     log_every: int = 1
     save_every: int = 10
     init: str = ""                  # warm start (behaviour-cloned net); also seeds the league pool
+    init_log_std: float = -3.0      # stick log std set at a warm start (net.LOG_STD_INIT; nan keeps the file's)
     critic_warmup: int = 15          # iterations that train only the critic after a warm start
 
 
@@ -90,15 +107,19 @@ class League:
         self.snaps: dict[int, dict] = {}            # id -> state_dict
         self.win: dict[int, float] = {0: 0.0}       # EMA of the learner win rate (ties = 0.5)
         self.games: dict[int, int] = {0: 0}
+        self.anchors: set[int] = set()              # never evicted (the warm start: keeps an old style in the pool)
         self.next_id = 1
 
-    def add(self, state, win=0.5):
-        if len(self.snaps) >= self.cfg.pool_size:                # drop the easiest (highest learner win rate)
-            drop = max(self.snaps, key=lambda k: self.win.get(k, 0.5))
+    def add(self, state, win=0.5, anchor=False):
+        free = [k for k in self.snaps if k not in self.anchors]
+        if len(self.snaps) >= self.cfg.pool_size and free:       # drop the easiest (highest learner win rate)
+            drop = max(free, key=lambda k: self.win.get(k, 0.5))
             self.snaps.pop(drop); self.win.pop(drop, None); self.games.pop(drop, None)
         i = self.next_id; self.next_id += 1
         self.snaps[i] = {k: v.detach().cpu().clone() for k, v in state.items()}
         self.win[i], self.games[i] = win, 0
+        if anchor:
+            self.anchors.add(i)
         return i
 
     def draw(self, n):
@@ -140,12 +161,21 @@ class Trainer:
         if cfg.init:
             sd = torch.load(cfg.init, map_location=self.dev, weights_only=False)
             self.net.load_state_dict(sd["net"] if "net" in sd else sd)
-        self.opt = torch.optim.Adam(self.net.parameters(), lr=cfg.lr, eps=1e-5)
+            if np.isfinite(cfg.init_log_std):
+                with torch.no_grad():
+                    self.net.log_std.fill_(cfg.init_log_std)
+        self.critic_params = list(self.net.critic.parameters())
+        self.actor_params = [p for n, p in self.net.named_parameters() if not n.startswith("critic.")]
+        goal_p = list(self.net.goal.parameters())
+        shared = [p for p in self.actor_params if all(p is not q for q in goal_p)]
+        self.opt = torch.optim.Adam([{"params": shared, "lr": cfg.lr}, {"params": goal_p, "lr": cfg.lr_goal},
+                                     {"params": self.critic_params, "lr": cfg.lr_critic}], eps=1e-5)
         self.league = League(cfg, self.rng)
         if cfg.init:
-            self.league.add(self.net.state_dict(), win=0.5)
+            self.league.add(self.net.state_dict(), win=0.5, anchor=True)
         self.pool_nets: dict[int, TeacherNet] = {}
         self.opp = np.full(self.N, -1)
+        self.side = np.zeros(self.N, int)                     # learner alliance per env
         self.ret_rms = RunningMeanStd()
         self.it, self.steps = 0, 0
         self.out = Path(cfg.out); self.out.mkdir(parents=True, exist_ok=True)
@@ -159,9 +189,15 @@ class Trainer:
     # ------------------------------------------------------------------ opponents
     def _assign(self, mask):
         self.opp[mask] = self.league.draw(int(mask.sum()))
+        if self.cfg.side_swap:
+            self.side[mask] = self.rng.integers(0, 2, int(mask.sum()))
+        self.env.set_ctrl(self._ctrl())
+
+    def _ctrl(self):
+        """(N,2) alliances driven by the baseline inside the workers: the opponent side of baseline episodes."""
         ctrl = np.zeros((self.N, 2), bool)
-        ctrl[:, 1] = self.opp == 0
-        self.env.set_ctrl(ctrl)
+        ctrl[np.arange(self.N), 1 - self.side] = self.opp == 0
+        return ctrl
 
     def _pool_net(self, i):
         if i not in self.pool_nets:
@@ -183,26 +219,25 @@ class Trainer:
         return t
 
     def _learner_mask(self):
-        m = np.zeros((self.N, R), bool)
-        m[:, :3] = True
-        m[:, 3:] = (self.opp < 0)[:, None]
-        return m.reshape(-1)
+        """(N*R,) robots driven by the learning net: its alliance, and both alliances in self-play."""
+        return ((ALLIANCE[None, :] == self.side[:, None]) | (self.opp < 0)[:, None]).reshape(-1)
 
     @torch.no_grad()
     def _act(self, t, deterministic=False):
         logits, mu, value = self.net(t)
-        std = self.net.log_std.exp().expand_as(mu)
+        std = self.net.stick_log_std().exp().expand_as(mu)
         goal = logits.argmax(-1) if deterministic else torch.distributions.Categorical(logits=logits).sample()
         stick = mu if deterministic else mu + std * torch.randn_like(mu)
-        # frozen pool opponents (red alliance of their envs)
+        # frozen pool opponents (the other alliance of their envs)
         opp = torch.from_numpy(np.repeat(self.opp, R)).to(self.dev)
-        red = torch.from_numpy(np.tile(ALLIANCE == 1, self.N)).to(self.dev)
+        other = torch.from_numpy((ALLIANCE[None, :] != self.side[:, None]).reshape(-1)).to(self.dev)
         for i in np.unique(self.opp[self.opp > 0]):
-            sel = (opp == i) & red
+            sel = (opp == i) & other
             sub = {k: v[sel] for k, v in t.items()}
-            lg, m2, _ = self._pool_net(int(i))(sub)
+            pn = self._pool_net(int(i))
+            lg, m2, _ = pn(sub)
             goal[sel] = torch.distributions.Categorical(logits=lg).sample()
-            stick[sel] = m2 + self._pool_net(int(i)).log_std.exp() * torch.randn_like(m2)
+            stick[sel] = m2 + pn.stick_log_std().exp() * torch.randn_like(m2)
         return goal, stick, mu, logits, value
 
     # ------------------------------------------------------------------ rollout
@@ -212,20 +247,21 @@ class Trainer:
             self.obs = self.env.reset()
         B = N * R
         buf = {k: [] for k in KEYS + ("glob", "decide")}
-        acts = {k: [] for k in ("goal", "stick", "lp", "val", "rew", "done", "lm")}
+        acts = {k: [] for k in ("goal", "stick", "lp_s", "lp_g", "val", "rew", "done", "lm")}
         w_shape = cfg.shape_w0 * max(0.0, 1.0 - self.it / max(cfg.shape_anneal_iters, 1))
         for _ in range(T):
             t = self._tensors(self.obs)
             goal, stick, mu, logits, value = self._act(t)
             with torch.no_grad():
                 lg, ent = goal_logp_entropy(logits, goal)
-                lp = stick_logp(mu, self.net.log_std.expand_as(mu), stick) + torch.where(t["decide"], lg, torch.zeros_like(lg))
+                lp_s = stick_logp(mu, self.net.stick_log_std().expand_as(mu), stick)
+                lp_g = torch.where(t["decide"], lg, torch.zeros_like(lg))
             for k in buf:
                 buf[k].append(t[k])
             res = self.env.step(np.clip(stick.cpu().numpy().reshape(N, R, 3), -1, 1), goal.cpu().numpy().reshape(N, R))
             rew = torch.from_numpy(res["r_team"] + w_shape * res["r_shape"]).to(self.dev).reshape(-1)
             done = torch.from_numpy(np.repeat(res["done"], R)).to(self.dev)
-            for k, v in (("goal", goal), ("stick", stick), ("lp", lp), ("val", value), ("rew", rew), ("done", done),
+            for k, v in (("goal", goal), ("stick", stick), ("lp_s", lp_s), ("lp_g", lp_g), ("val", value), ("rew", rew), ("done", done),
                          ("lm", torch.from_numpy(self._learner_mask()).to(self.dev))):
                 acts[k].append(v)
             for a in range(2):
@@ -246,11 +282,13 @@ class Trainer:
             b, r = res["final"][e]
             if np.isnan(b):                                   # desync truncation, not a finished match
                 continue
-            opp = int(self.opp[e])
-            win = 1.0 if b > r else (0.5 if b == r else 0.0)
+            opp, sd = int(self.opp[e]), int(self.side[e])
+            me, them = res["final"][e][sd], res["final"][e][1 - sd]               # learner / opponent alliance
+            win = 1.0 if me > them else (0.5 if me == them else 0.0)
             self.league.record(opp, win)
             fb, fr = self.ep_foul[e]
-            self.stats["ep"].append((opp, float(b), float(r), win, float(fb), float(fr)))
+            self.stats["ep"].append((opp, float(me), float(them), win, float(self.ep_foul[e, sd]),
+                                     float(self.ep_foul[e, 1 - sd]), sd))
             if max(b, r) > 350 or max(fb, fr) > 60:                       # exploit candidates -> anomalies.jsonl
                 rules = getattr(self, "foul_rules", None)
                 fr_rule = res["final_rule"][e] if "final_rule" in res else None
@@ -278,42 +316,72 @@ class Trainer:
         idx = lm.reshape(-1).nonzero()[:, 0]
         flat = lambda x: x.reshape(-1, *x.shape[2:])
         data = {k: flat(v)[idx] for k, v in buf.items()}
-        goal, stick, lp_old = flat(acts["goal"])[idx], flat(acts["stick"])[idx], flat(acts["lp"])[idx]
+        goal, stick = flat(acts["goal"])[idx], flat(acts["stick"])[idx]
+        lp_s_old, lp_g_old = flat(acts["lp_s"])[idx], flat(acts["lp_g"])[idx]
         advf, retf = flat(adv)[idx], flat(ret)[idx]
         advf = (advf - advf.mean()) / (advf.std() + 1e-8)
         retn = (retf - mean) / std
         n = idx.numel()
-        stats = {"pg": 0.0, "vf": 0.0, "ent_goal": 0.0, "kl": 0.0, "clipfrac": 0.0}
-        cnt = 0
+        keys = ("pg_stick", "pg_goal", "vf", "ent_goal", "kl_stick", "kl_goal", "clip_stick", "clip_goal",
+                "gn_actor", "gn_critic")
+        stats = dict.fromkeys(keys, 0.0)
+        cnt = act_cnt = 0
+        warm = self.it < cfg.critic_warmup and bool(cfg.init)
+        actor_on = not warm
         for _ in range(cfg.epochs):
             perm = torch.randperm(n, device=self.dev)
             for s in range(0, n, cfg.minibatch):
                 mb = perm[s:s + cfg.minibatch]
-                o = {k: v[mb] for k, v in data.items() if k != "decide"}
-                logits, mu, value = self.net(o)
-                lg, ent = goal_logp_entropy(logits, goal[mb])
-                dec = data["decide"][mb]
-                lp = stick_logp(mu, self.net.log_std.expand_as(mu), stick[mb]) + torch.where(dec, lg, torch.zeros_like(lg))
-                ratio = (lp - lp_old[mb]).exp()
-                a = advf[mb]
-                pg = -torch.min(ratio * a, ratio.clamp(1 - cfg.clip, 1 + cfg.clip) * a).mean()
-                vf = ((value - retn[mb]) ** 2).mean()
-                ent_g = (ent * dec).sum() / dec.sum().clamp(min=1)
-                if self.it < cfg.critic_warmup and cfg.init:
-                    loss = cfg.vf_coef * vf                                   # critic only; the cloned actor stays put
-                else:
-                    loss = pg + cfg.vf_coef * vf - cfg.ent_goal * ent_g - cfg.ent_stick * stick_entropy(self.net.log_std).sum()
+                n_mb, nd = float(mb.numel()), data["decide"][mb].float().sum().clamp(min=1.0)
                 self.opt.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg.max_grad)
+                acc = dict.fromkeys(("pg_stick", "pg_goal", "vf", "ent_goal", "kl_stick", "kl_goal", "clip_stick",
+                                     "clip_goal"), 0.0)
+                for c in mb.split(cfg.micro):                                       # sums / minibatch counts
+                    o = {k: v[c] for k, v in data.items() if k != "decide"}
+                    logits, mu, value = self.net(o)
+                    lg, ent = goal_logp_entropy(logits, goal[c])
+                    dec = data["decide"][c].float()
+                    log_std = self.net.stick_log_std()
+                    a = advf[c]
+                    d_s = stick_logp(mu, log_std.expand_as(mu), stick[c]) - lp_s_old[c]
+                    d_g = (lg - lp_g_old[c]) * dec                                  # 0 (ratio 1) off the decide ticks
+                    r_s, r_g = d_s.exp(), d_g.exp()
+                    pg_s = -torch.min(r_s * a, r_s.clamp(1 - cfg.clip, 1 + cfg.clip) * a).sum() / n_mb
+                    pg_g = -(torch.min(r_g * a, r_g.clamp(1 - cfg.clip_goal, 1 + cfg.clip_goal) * a) * dec).sum() / nd
+                    vf = ((value - retn[c]) ** 2).sum() / n_mb
+                    ent_g = (ent * dec).sum() / nd
+                    if not actor_on:
+                        loss = cfg.vf_coef * vf                                     # critic only (warm-up, or KL reached)
+                    else:
+                        loss = pg_s + pg_g + cfg.vf_coef * vf - cfg.ent_goal * ent_g \
+                            - cfg.ent_stick * stick_entropy(log_std) * (c.numel() / n_mb)
+                    loss.backward()
+                    with torch.no_grad():
+                        for k, v in (("pg_stick", pg_s), ("pg_goal", pg_g), ("vf", vf), ("ent_goal", ent_g),
+                                     ("kl_stick", ((r_s - 1) - d_s).sum() / n_mb),
+                                     ("kl_goal", (((r_g - 1) - d_g) * dec).sum() / nd),
+                                     ("clip_stick", ((r_s - 1).abs() > cfg.clip).float().sum() / n_mb),
+                                     ("clip_goal", (((r_g - 1).abs() > cfg.clip_goal).float() * dec).sum() / nd)):
+                            acc[k] += float(v)
+                if actor_on and acc["kl_stick"] + acc["kl_goal"] > 1.5 * cfg.target_kl:
+                    actor_on = False                                                # this minibatch went too far:
+                    for p in self.actor_params:                                    # drop its actor gradient
+                        p.grad = None
+                gn_a = torch.nn.utils.clip_grad_norm_(self.actor_params, cfg.max_grad) if actor_on else torch.zeros(())
+                gn_c = torch.nn.utils.clip_grad_norm_(self.critic_params, cfg.max_grad_critic)
                 self.opt.step()
-                with torch.no_grad():
-                    stats["pg"] += pg.item(); stats["vf"] += vf.item(); stats["ent_goal"] += ent_g.item()
-                    stats["kl"] += ((ratio - 1) - (lp - lp_old[mb])).mean().item()
-                    stats["clipfrac"] += ((ratio - 1).abs() > cfg.clip).float().mean().item()
+                for k, v in acc.items():
+                    stats[k] += v
+                stats["gn_actor"] += float(gn_a); stats["gn_critic"] += float(gn_c)
                 cnt += 1
+                act_cnt += int(actor_on)
         stats = {k: v / max(cnt, 1) for k, v in stats.items()}
+        stats["gn_actor"] *= cnt / max(act_cnt, 1)
+        stats["kl"], stats["clipfrac"] = stats["kl_stick"] + stats["kl_goal"], stats["clip_stick"]
+        stats["actor_frac"] = act_cnt / max(cnt, 1)                         # share of minibatches that moved the actor
         with torch.no_grad():
+            sd = self.net.stick_log_std().exp()
+            stats["std_stick"], stats["std_stick_min"] = float(sd.mean()), float(sd.min())
             var_y = retn.var()
             stats["expl_var"] = float(1 - ((retn - self._value_of(data, idx)) ** 2).mean() / (var_y + 1e-8))
         return stats
@@ -355,10 +423,12 @@ class Trainer:
         return row
 
     def _summarise(self, ep):
+        """Episode stats from the learner's side: score_learner / score_opp, wins per opponent kind, and vs the
+        baseline with and without our robot (slot 0, blue) on the learner's side."""
         out = {"episodes": len(ep)}
         if ep:
             a = np.array(ep)
-            out["score_blue"], out["score_red"] = float(a[:, 1].mean()), float(a[:, 2].mean())
+            out["score_learner"], out["score_opp"] = float(a[:, 1].mean()), float(a[:, 2].mean())
             out["score_median"] = float(np.median(np.concatenate([a[:, 1], a[:, 2]])))
             out["score_max"] = float(max(a[:, 1].max(), a[:, 2].max()))
             out["foul_mean"] = float(a[:, 4:6].mean())
@@ -367,13 +437,17 @@ class Trainer:
                 if sel.any():
                     out[f"win_{name}"], out[f"n_{name}"] = float(a[sel, 3].mean()), int(sel.sum())
                     out[f"score_{name}"] = float(a[sel, 1].mean())
+            for name, sd in (("with_ours", 0), ("without_ours", 1)):
+                sel = (a[:, 0] == 0) & (a[:, 6] == sd)
+                if sel.any():
+                    out[f"win_baseline_{name}"] = float(a[sel, 3].mean())
         return out
 
     def save(self, name=None):
         path = self.out / (name or f"iter_{self.it:06d}.pt")
         torch.save({"net": self.net.state_dict(), "opt": self.opt.state_dict(), "it": self.it, "steps": self.steps,
                     "cfg": asdict(self.cfg), "ret_rms": (self.ret_rms.mean, self.ret_rms.var, self.ret_rms.count),
-                    "pool": self.league.snaps, "win": self.league.win}, path)
+                    "pool": self.league.snaps, "win": self.league.win, "anchors": sorted(self.league.anchors)}, path)
         torch.save(self.net.state_dict(), self.out / "latest_net.pt")
         return path
 

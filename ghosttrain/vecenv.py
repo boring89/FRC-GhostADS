@@ -37,6 +37,7 @@ class _Worker:
         self.prev_push = self.sim.gs.push_events.copy()
         self.plan_cache = None
         self.noise = 0.0                                          # exec noise on baseline-driven robots (labels stay clean)
+        self.label_all = False                                    # DAgger: baseline labels for every robot, whoever drives
         self.rng = np.random.default_rng(cfg.seed + 7)
         self.trunc_at = self.rng.integers(20, 1300, self.n)       # desynchronise the envs: first episode is cut short
 
@@ -80,12 +81,16 @@ class _Worker:
         self.goal = np.where(dec, goal_new, self.goal)                          # held goal = what the observation shows
         exec_goal = self.goal.copy()
         bl_m = self.ctrl[:, ALLIANCE]                                           # (n,R)
-        if bl_m.any():
+        bst = None
+        if bl_m.any() or self.label_all:
             bst, _ = self.bl.act(sim, plan)
             stick = np.where(bl_m[..., None], bst, stick)
             exec_goal = np.where(bl_m, plan[0], exec_goal)                      # the baseline re-plans every tick
             self.goal = np.where(bl_m & dec, plan[0], self.goal)                # ...but "decides" once per second
-        act_stick, act_goal = stick.copy(), exec_goal.copy()                    # clean labels for behaviour cloning
+        if self.label_all:                                                      # what the baseline would do here
+            act_stick, act_goal = bst.copy(), np.asarray(plan[0]).copy()
+        else:
+            act_stick, act_goal = stick.copy(), exec_goal.copy()                # clean labels for behaviour cloning
         if self.noise > 0 and bl_m.any():
             stick = np.where(bl_m[..., None], np.clip(stick + self.rng.normal(0, self.noise, stick.shape), -1, 1), stick)
         info = sim.step(stick, exec_goal)
@@ -147,10 +152,12 @@ class _Worker:
                 "final": final, "final_cat": final_cat, "final_rule": final_rule,
                 "pts": info.points.astype(np.float32), "fouls": info.fouls.astype(np.float32)}
 
-    def set_ctrl(self, c, noise=None):
+    def set_ctrl(self, c, noise=None, label_all=None):
         self.ctrl = np.asarray(c, bool)
         if noise is not None:
             self.noise = float(noise)
+        if label_all is not None:
+            self.label_all = bool(label_all)
 
 
 R_ = 6
@@ -213,14 +220,15 @@ class TeacherVecEnv:
         res["obs"] = _cat([o["obs"] for o in outs])
         return res
 
-    def set_ctrl(self, ctrl, noise=None):
-        """ctrl (n_envs, 2) bool: alliance driven by the baseline policy. noise: exec noise std on its stick."""
+    def set_ctrl(self, ctrl, noise=None, label_all=None):
+        """ctrl (n_envs, 2) bool: alliance driven by the baseline policy. noise: exec noise std on its stick.
+        label_all: act_stick / act_goal are the baseline's actions for every robot (DAgger labels)."""
         if self.in_process:
             for i, w in enumerate(self.local):
-                w.set_ctrl(self._sl(ctrl, i), noise)
+                w.set_ctrl(self._sl(ctrl, i), noise, label_all)
             return
         for i, c in enumerate(self.conns):
-            c.send(("ctrl", self._sl(ctrl, i), noise))
+            c.send(("ctrl", self._sl(ctrl, i), noise, label_all))
         [c.recv() for c in self.conns]
 
     def close(self):

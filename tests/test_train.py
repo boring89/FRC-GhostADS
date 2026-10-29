@@ -7,8 +7,8 @@ from ghostsim import SimCfg, VecSim
 from ghostsim.robots import ALLIANCE, R
 from ghosttrain.audit import Auditor, state_points
 from ghosttrain.baseline import Baseline
-from ghosttrain.mappo import League, TrainCfg, compute_gae, stale_opponents
-from ghosttrain.net import TeacherNet, goal_logp_entropy, stick_logp
+from ghosttrain.mappo import League, TrainCfg, Trainer, compute_gae, stale_opponents
+from ghosttrain.net import LOG_STD_MIN, TeacherNet, goal_logp_entropy, stick_logp
 from ghosttrain.obs import Encoder
 from ghosttrain.vecenv import DECIDE_EVERY, TeacherVecEnv, _Worker
 
@@ -148,6 +148,48 @@ def test_league_pfsp_prefers_hard_opponents_and_evicts_easy():
     assert a not in lg.snaps and b in lg.snaps and c in lg.snaps
 
 
+def test_league_anchor_is_never_evicted():
+    lg = League(TrainCfg(pool_size=2), np.random.default_rng(0))
+    a = lg.add({"w": torch.zeros(1)}, win=0.99, anchor=True)      # the warm start: easiest, but kept
+    for _ in range(4):
+        lg.add({"w": torch.zeros(1)}, win=0.5)
+    assert a in lg.snaps and len(lg.snaps) == 2
+
+
+def test_stick_std_has_a_soft_floor():
+    net = TeacherNet(14, 333)
+    with torch.no_grad():
+        net.log_std.fill_(-1.6)
+    assert torch.allclose(net.stick_log_std(), torch.full((3,), -1.6), atol=0.01)     # identity well above the floor
+    with torch.no_grad():
+        net.log_std.fill_(-8.0)
+    assert (net.stick_log_std() >= LOG_STD_MIN - 1e-6).all()
+    net.stick_log_std().sum().backward()
+    assert net.log_std.grad.abs().sum() > 0                                          # still differentiable down there
+
+
+def test_trainer_sides_learner_mask_and_per_head_update(tmp_path):
+    """The learner may play either alliance: the mask, the baseline control and the pool side follow it; one PPO
+    iteration reports finite per-head statistics."""
+    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, epochs=1, minibatch=128, device="cpu", out=str(tmp_path))
+    tr = Trainer(cfg, TeacherVecEnv(SimCfg(n_envs=4, sensors=False, seed=0), 1, in_process=True))
+    try:
+        tr.opp[:] = [0, -1, 0, 0]
+        tr.side[:] = [0, 1, 1, 0]
+        m = tr._learner_mask().reshape(4, R)
+        blue = ALLIANCE == 0
+        assert (m[0] == blue).all() and m[1].all() and (m[2] == ~blue).all() and (m[3] == blue).all()
+        assert tr._ctrl().tolist() == [[False, True], [False, False], [True, False], [False, True]]
+        tr._assign(np.ones(4, bool))
+        assert set(np.unique(tr.side)) <= {0, 1}
+        row = tr.train(1)
+        for k in ("pg_stick", "pg_goal", "clip_stick", "clip_goal", "kl_stick", "kl_goal", "gn_actor", "gn_critic"):
+            assert np.isfinite(row[k]), k
+        assert row["std_stick_min"] >= np.exp(LOG_STD_MIN) - 1e-6
+    finally:
+        tr.close()
+
+
 # ------------------------------------------------------------------ environment
 def test_worker_rewards_decisions_and_autoreset():
     w = _Worker(SimCfg(n_envs=2, sensors=False, seed=0, randomize=False, slots=("ours",) * 6))
@@ -229,3 +271,55 @@ def test_evicted_pool_snapshot_is_not_used_by_running_envs():
     lg.add({"w": torch.zeros(1)}, win=0.5)                      # evicts the easiest snapshot (a)
     stale = stale_opponents(opp, lg)
     assert stale.tolist() == [False, False, True, False, True]
+
+
+def test_micro_batches_give_the_same_update(tmp_path):
+    """Gradient accumulation over micro-batches is a memory setting only: same parameters after an update."""
+    import copy
+    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, epochs=1, minibatch=128, micro=128, device="cpu",
+                   out=str(tmp_path))
+    tr = Trainer(cfg, TeacherVecEnv(SimCfg(n_envs=4, sensors=False, seed=0), 1, in_process=True))
+    try:
+        buf, acts, last, _ = tr.rollout()
+        net0, opt0, rms0 = copy.deepcopy(tr.net.state_dict()), copy.deepcopy(tr.opt.state_dict()), copy.deepcopy(tr.ret_rms)
+        out = []
+        for micro in (128, 32):
+            tr.net.load_state_dict(net0); tr.opt.load_state_dict(opt0); tr.ret_rms = copy.deepcopy(rms0)
+            tr.cfg.micro = micro
+            torch.manual_seed(0)
+            st = tr.update(buf, acts, last)
+            out.append(({k: v.clone() for k, v in tr.net.state_dict().items()}, st))
+        for k in out[0][0]:
+            assert torch.allclose(out[0][0][k], out[1][0][k], atol=1e-5), k
+        assert abs(out[0][1]["clip_stick"] - out[1][1]["clip_stick"]) < 1e-6
+    finally:
+        tr.close()
+
+
+def test_dagger_labels_come_from_the_baseline_while_the_policy_drives():
+    """label_all: the worker returns the baseline's stick / goal for every robot as the label, but executes the
+    given actions for the robots the baseline does not drive (bc.py DAgger rounds)."""
+    w = _Worker(SimCfg(n_envs=2, sensors=False, seed=0, randomize=False, slots=("ours",) * 6))
+    w.reset()
+    w.set_ctrl(np.zeros((2, 2), bool), label_all=True)
+    plan = w.bl.plan(w.sim)
+    bst, _ = w.bl.act(w.sim, plan)
+    r = w.step(np.zeros((2, 6, 3)), np.zeros((2, 6), int))
+    assert np.allclose(r["act_stick"], bst, atol=1e-6) and np.abs(bst).max() > 0.1
+    assert (r["act_goal"] == plan[0]).all()
+    assert np.abs(w.sim.body.vel[..., :2]).max() < 0.05                    # the zero stick was executed, not the label
+
+
+def test_kl_target_stops_actor_updates_but_not_the_critic(tmp_path):
+    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, epochs=3, minibatch=64, device="cpu", out=str(tmp_path),
+                   target_kl=1e-7, lr=1e-3)
+    tr = Trainer(cfg, TeacherVecEnv(SimCfg(n_envs=4, sensors=False, seed=0), 1, in_process=True))
+    try:
+        critic0 = [p.detach().clone() for p in tr.critic_params]
+        row = tr.train(1)
+        assert row["actor_frac"] < 0.5                                        # stopped early
+        assert any(not torch.equal(a, b) for a, b in zip(critic0, tr.critic_params))     # critic still trained
+        tr.cfg.target_kl = 1e9
+        assert tr.train(1)["actor_frac"] == 1.0
+    finally:
+        tr.close()

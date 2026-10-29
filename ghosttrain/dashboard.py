@@ -39,11 +39,13 @@ img{display:block;border-radius:4px;background:#000}
 </div>
 <script>
 const CH=[
- {t:"win rate vs baseline (EMA) - target 0.8",keys:[["winrate_baseline","#4caf50"],["win_self","#888"]],ref:[0.5,0.8],y:[0,1]},
- {t:"match score (blue=learner, red=opponent)",keys:[["score_blue","#4da3ff"],["score_red","#ff6b6b"],["score_median","#ddd"]]},
+ {t:"win rate vs baseline (EMA) - target 0.8",keys:[["winrate_baseline","#4caf50"],["win_baseline_with_ours","#9ccc65"],["win_baseline_without_ours","#558b2f"]],ref:[0.5,0.8],y:[0,1]},
+ {t:"match score (learner / opponent; learner alliance drawn per match)",keys:[["score_learner","#4da3ff"],["score_opp","#ff6b6b"],["score_median","#ddd"]]},
  {t:"fouls committed per alliance per match",keys:[["foul_mean","#ffb74d"]],log:true},
  {t:"goal entropy (ln13=2.56)",keys:[["ent_goal","#ba68c8"]]},
- {t:"approx KL / clip fraction",keys:[["kl","#4dd0e1"],["clipfrac","#f06292"]]},
+ {t:"approx KL / clip fraction (stick, goal) / share of minibatches updating the actor",keys:[["kl","#4dd0e1"],["clip_stick","#f06292"],["clip_goal","#ffb74d"],["actor_frac","#90a4ae"]]},
+ {t:"stick std (floor 0.1)",keys:[["std_stick","#81c784"],["std_stick_min","#388e3c"]]},
+ {t:"gradient norm before clipping (actor, critic)",keys:[["gn_actor","#e57373"],["gn_critic","#64b5f6"]],log:true},
  {t:"critic explained variance",keys:[["expl_var","#aed581"]],y:[-0.2,1]},
  {t:"agent-steps / s",keys:[["sps","#90a4ae"]]},
  {t:"mean step reward",keys:[["ret_mean","#fff176"]]},

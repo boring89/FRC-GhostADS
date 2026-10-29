@@ -59,7 +59,7 @@ def evaluate(net_path, episodes=100, n_procs=12, envs_per_proc=8, deterministic=
             t["glob"] = torch.from_numpy(obs["glob"]).to(dev)[:, ALLIANCE].reshape(N * R, -1)
             logits, mu, _ = net(t)
             goal = (logits.argmax(-1) if deterministic else torch.distributions.Categorical(logits=logits).sample())
-            stick = (mu if deterministic else mu + net.log_std.exp() * torch.randn_like(mu))
+            stick = (mu if deterministic else mu + net.stick_log_std().exp() * torch.randn_like(mu))
             stick = np.clip(stick.cpu().numpy().reshape(N, R, 3), -1, 1)
             goal = goal.cpu().numpy().reshape(N, R)
         res = env.step(stick, goal)

@@ -10,6 +10,11 @@ import torch.nn.functional as F
 
 from .obs import FF, FL, FO, FP, S
 
+LOG_STD_MIN = -3.5        # stick exploration floor (std 0.03): without one log_std collapsed -1.6 -> -4.2 in teacher5-7.
+                          # Not higher: scoring needs the robot stopped (<= 0.3 m/s), and stick noise costs points
+                          # (bc9 vs baseline: std 0.05 131-117, 0.10 107-120, 0.20 31-116)
+LOG_STD_INIT = -3.0       # std 0.05 for a warm start (behaviour cloning has no std of its own)
+
 
 def mlp(i, h, o, ln=True):
     return nn.Sequential(nn.Linear(i, h), nn.GELU(), nn.Linear(h, o)) if not ln else \
@@ -72,9 +77,13 @@ class TeacherNet(nn.Module):
         value = self.critic(torch.cat([o["glob"], x.detach()], -1))[:, 0]      # critic never perturbs the actor's encoder
         return logits, self.mu(h), value
 
+    def stick_log_std(self):
+        """log std of the stick with a soft floor at LOG_STD_MIN (identity well above it, never below it)."""
+        return LOG_STD_MIN + F.softplus(5.0 * (self.log_std - LOG_STD_MIN)) / 5.0
+
     def dist(self, o):
         logits, mu, value = self.forward(o)
-        return logits, mu, self.log_std.expand_as(mu), value
+        return logits, mu, self.stick_log_std().expand_as(mu), value
 
 
 def stick_logp(mu, log_std, a):
