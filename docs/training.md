@@ -147,6 +147,10 @@ inference on GPU is slow while Godot renders on the same GPU.
   full linear map incl. the frame scale) plus bumpers and held pieces (`mech_slots(..., cad=True)`); Godot loads
   robot.glb once (`robot="auto"` in `RenderClient.configure`, live view only; training cameras do not draw
   mechanisms). 64 slots per robot. `robots/ours.json held_offset_m` = the carry pose of the effector.
+- Renders without a mechanism array (robot cameras in training, `ghostsim/env.py`, replays) draw the randomised box
+  robots of the appearance (body, alliance bumpers with the team number, boxes on top) again; the mechanism hides
+  them. From eb3a764 (first live-view mechanism) until this fix they were never built, so those images showed no
+  robots at all. Regression test: `tests/test_render_robots.py` (runs when Godot is installed).
 - `tools/mech_view.py` (box model, PNG poses) and `tools/mech_anim.py` (video of the real tracker on a scripted
   station -> L4 -> floor algae -> processor -> climb sequence).
 - Earlier versions (before 2026-10-29 evening): a box model after 6328 pictures with a front algae arm, a funnel on

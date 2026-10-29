@@ -249,12 +249,16 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 	var dyn := Node3D.new()
 	vp.add_child(dyn)
 	var robots := []
+	var proxies := []
 	var mech_pool := []
 	var bodies := []
 	for r in 6:
 		var n := Node3D.new()
 		dyn.add_child(n)
 		robots.append(n)
+		var px := Node3D.new()                    # randomised box robot (appearance), drawn when no "mech" comes
+		n.add_child(px)
+		proxies.append(px)
 		mech_pool.append(make_mech_pool(n))
 		bodies.append(make_bodies(n))
 	var coral := multimesh(CylinderMesh.new(), int(pieces["mc"]), mat(Color(0.95, 0.95, 0.93), 0.6), false)
@@ -284,8 +288,8 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 	var crowd := multimesh(BoxMesh.new(), 0, mat(Color.WHITE, 0.9), true)
 	crowd.material_override.vertex_color_use_as_albedo = true
 	vp.add_child(crowd)
-	return {"vp": vp, "world": vp.find_world_3d(), "static": stat, "dyn": dyn, "robots": robots, "mech": mech_pool,
-			"bodies": bodies, "coral": coral,
+	return {"vp": vp, "world": vp.find_world_3d(), "static": stat, "dyn": dyn, "robots": robots, "proxy": proxies,
+			"mech": mech_pool, "bodies": bodies, "coral": coral,
 			"algae": algae, "cages": cages, "markers": markers, "crowd": crowd, "env": env, "sun": sun, "mats": mats}
 
 
@@ -422,6 +426,9 @@ func make_bodies(parent: Node3D) -> Array:
 
 func appearance(h: Dictionary) -> void:
 	var e: Dictionary = envs[int(h["env"])]
+	var rs: Array = h.get("robots", [])
+	for r in mini(6, rs.size()):
+		build_robot(e["proxy"][r], rs[r])
 	var dr: Dictionary = h["dr"]
 	var env: Environment = e["env"].environment
 	env.background_color = Color(dr["bg_rgb"][0], dr["bg_rgb"][1], dr["bg_rgb"][2])
@@ -436,6 +443,9 @@ func appearance(h: Dictionary) -> void:
 	build_crowd(e["crowd"], int(dr["crowd_seed"]), dr["crowd_density"], h["field"])
 
 
+## Randomised box robot (body, bumpers with the team number, a few boxes on top) for renders without a mechanism
+## array (robot cameras in training, replays). `node` is the robot's proxy container, not the robot node itself (that
+## also holds the mechanism pool and the robot.glb bodies).
 func build_robot(node: Node3D, a: Dictionary) -> void:
 	for c in node.get_children():
 		c.queue_free()
@@ -576,6 +586,7 @@ func place_env(ei: int, a: Dictionary, check: bool, echo: Array) -> void:
 	for r in 6:
 		var o := (ei * 6 + r) * 4
 		var node: Node3D = e["robots"][r]
+		e["proxy"][r].visible = not a.has("mech")         # the mechanism draws the robot when it is sent
 		node.transform = Transform3D(Basis(Vector3.UP, rob[o + 2]), gv([rob[o], rob[o + 1], rob[o + 3]]))
 		if check:
 			var g := node.global_transform
