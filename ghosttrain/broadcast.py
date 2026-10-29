@@ -286,6 +286,7 @@ class Broadcast:
 
     def _run(self):
         from ghostrender.client import RenderClient
+        from ghostsim.mechanism_state import mech_slots
         from ghostsim import load
 
         game = load("2025")
@@ -350,7 +351,8 @@ class Broadcast:
                 state = dict(latest["state"])
                 if prev is not None:
                     state["robots"] = prev["state"]["robots"] + alpha * (latest["state"]["robots"] - prev["state"]["robots"])
-                state["mech"] = latest["mech"]
+                mq = latest["mech"]["q"] if prev is None else prev["mech"]["q"] + alpha * (latest["mech"]["q"] - prev["mech"]["q"])
+                state["mech"] = mech_slots(mq, latest["mech"]["hold"], latest["mech"]["funnel"], latest["mech"]["frames"])
                 if time.time() >= pick["next"]:
                     pick.update(blue=int(self.rng.integers(0, 3)), red=int(self.rng.integers(3, 6)),
                                 next=time.time() + TILE_CHANGE_S)

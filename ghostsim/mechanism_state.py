@@ -1,49 +1,111 @@
-"""Joint state of the 254-style mechanism for each robot, driven by the policy's goal (renderer only).
+"""Joint state of the mechanism for each robot (renderer only; not physics, not observations).
 
-It is NOT part of the physics or the observations: the broadcast simulation process runs it once per tick and sends the
-resulting geometry to the renderer. Joints move toward a per-goal target at a limited rate, so the animation shows
-elevator / wrist / intake motion that follows what the robot is doing.
+The broadcast simulation process updates it once per policy tick from what the rules are doing, and the renderer
+interpolates the joints between ticks:
+  - driving: carry pose (elevator down, dispenser level, algae arm stowed or cradling a ball). Nothing moves on the
+    way, whatever goal the policy currently names.
+  - dwell (the rules' timer for the current goal is running, i.e. the robot is in place and stopped): the joints
+    follow the dwell progress p = timer / need, so a score pose is reached at ~70 % of the dwell and the piece leaves
+    at 100 %. After a release the pose is held for LINGER_S, then everything returns to carry.
+  - coral station: a coral slides down the funnel during the dwell.
+  - floor intake (algae; coral for partners / opponents that have one): the arm is down while the robot intakes;
+    climb: the climber reaches out, then pulls.
+Joint rates are limited (elevator 3 m/s), so a move takes several frames even if a dwell is short.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from .mechanism import SLOTS, SLOT_W, WRIST_MIN_DEG, pose, slots_for
+from .mechanism import ARM, SLOT_W, SLOTS, STOW, coral_target, pose, slots_for
 
-STOW = (0.0, 80.0, 75.0)                    # (h m, theta deg, psi deg)
-TARGETS = {
-    "coral_floor": (0.0, 80.0, -10.0),      # intake down, wrist stowed
-    "algae_floor": (0.0, WRIST_MIN_DEG, 75.0),
-    "algae_reef": (0.5, 0.0, 75.0),
-    "score_L1": (0.0, -10.0, 75.0),         # trough
-    "score_L2": (0.30, 0.0, 75.0),          # branch top 31.9 in
-    "score_L3": (0.70, 0.0, 75.0),          # 47.6 in
-    "score_L4": (1.32, 0.0, 75.0),          # 72 in
-    "processor": (0.0, WRIST_MIN_DEG, 75.0),
-    "net": (1.32, 20.0, 75.0),
-}
-RATE = np.array([4.4, 1050.0, 600.0])       # elevator m/s, wrist deg/s, intake deg/s (254 binder timings)
-H_MAX_STATE = 1.32
+JOINTS = ("h", "wrist", "arm", "climb")
+RATE = np.array([3.0, 300.0, 360.0, 120.0])        # m/s, deg/s, deg/s, deg/s
+LINGER_S = 0.35
+RISE_AT = 0.7                                      # share of the dwell at which a score pose is reached
+REEF_ALGAE_Z = {"low": 36.3 * 0.0254, "high": 52.1 * 0.0254}     # game.json field.reef.algae_rest
+# score poses: (coral centre height, wrist); heights a little above each branch top / the trough
+CORAL_AT = {"score_L1": (0.50, -20.0), "score_L2": (0.84, -35.0), "score_L3": (1.24, -35.0), "score_L4": (1.86, -35.0)}
+SCORE = {g: (coral_target(z, w), w) for g, (z, w) in CORAL_AT.items()}
+
+
+def ease(u):
+    u = min(max(u, 0.0), 1.0)
+    return u * u * (3 - 2 * u)
+
+
+def carry(hold_algae):
+    q = np.array([STOW[j] for j in JOINTS], float)
+    q[2] = ARM["hold"] if hold_algae else ARM["stow"]
+    return q
+
+
+def target(goal, p, hold_coral, hold_algae, climbed, algae_high=False):
+    """Joint target and funnel coral position (None or 0..1) for one robot. p: dwell progress (0 = not dwelling)."""
+    q = carry(hold_algae)
+    funnel = None
+    u = ease(p / RISE_AT) if p > 0 else 0.0
+    if goal in SCORE and p > 0:
+        h, w = SCORE[goal]
+        q[0], q[1] = h * u, w * u
+    elif goal == "algae_reef" and p > 0:
+        q[0] = max(0.0, REEF_ALGAE_Z["high" if algae_high else "low"] - 0.40) * u   # dispenser nose at the algae
+        q[2] = ARM["catch"]
+    elif goal == "net" and p > 0:
+        q[2] = ARM["hold"] + (ARM["net"] - ARM["hold"]) * ease(p)
+    elif goal == "processor" and p > 0:
+        q[2] = ARM["processor"]
+    elif goal == "coral_station" and p > 0 and not hold_coral:
+        funnel = ease(p)
+    if (goal == "algae_floor" and not hold_algae) or (goal == "coral_floor" and not hold_coral):
+        q[2] = ARM["floor"]                        # the front arm is the only floor intake drawn (others' coral too)
+    if climbed:
+        q[3] = 60.0
+    elif goal == "climb":
+        q[3] = 15.0
+    return q, funnel
 
 
 class JointTracker:
     def __init__(self, goals, n_robots=6):
         self.goals = list(goals)
-        self.q = np.tile(np.array(STOW, float), (n_robots, 1))            # (R, 3): h, theta, psi
         self.n = n_robots
+        self.q = np.tile(carry(False), (n_robots, 1))
+        self.linger = np.zeros(n_robots)
+        self.linger_goal = [""] * n_robots
+        self.prev_hold = np.zeros((n_robots, 2), bool)
+        self.hold = [None] * n_robots
+        self.funnel = [None] * n_robots
 
-    def update(self, goal_ids, hold_coral, hold_algae, dt=0.1):
+    def update(self, goal_ids, progress, hold_coral, hold_algae, climbed, algae_high=None, dt=0.1):
+        """goal_ids, progress (0..1, 0 = not dwelling), hold_*, climbed, algae_high: per robot."""
+        algae_high = np.zeros(self.n, bool) if algae_high is None else algae_high
         for r in range(self.n):
-            name = self.goals[int(goal_ids[r])]
-            tgt = np.array(TARGETS.get(name, STOW), float)
+            g = self.goals[int(goal_ids[r])]
+            hc, ha = bool(hold_coral[r]), bool(hold_algae[r])
+            released = (self.prev_hold[r, 0] and not hc) or (self.prev_hold[r, 1] and not ha)
+            if released and (g in SCORE or g in ("net", "processor")):
+                self.linger[r], self.linger_goal[r] = LINGER_S, g
+            if self.linger[r] > 0:
+                self.linger[r] -= dt
+                g, p = self.linger_goal[r], 1.0
+            else:
+                p = float(progress[r])
+            tgt, self.funnel[r] = target(g, p, hc, ha, bool(climbed[r]), bool(algae_high[r]))
             step = RATE * dt
             self.q[r] = self.q[r] + np.clip(tgt - self.q[r], -step, step)
-        self.hold = [("coral" if hold_coral[r] else ("algae" if hold_algae[r] else None)) for r in range(self.n)]
+            self.prev_hold[r] = (hc, ha)
+            self.hold[r] = "both" if hc and ha else ("coral" if hc else ("algae" if ha else None))
 
-    def slots(self):
-        """(1, R, SLOTS, SLOT_W) for the renderer (one environment)."""
-        out = np.zeros((1, self.n, SLOTS, SLOT_W), np.float32)
-        for r in range(self.n):
-            h, th, ps = self.q[r]
-            out[0, r] = slots_for(pose(h=h, theta=th, psi=ps, hold=self.hold[r]))
-        return out
+    def state(self):
+        """Per-tick snapshot for the renderer: joints (R,4) and the piece state per robot."""
+        return {"q": self.q.copy(), "hold": list(self.hold), "funnel": list(self.funnel)}
+
+
+def mech_slots(q, hold, funnel, frames, n=6):
+    """(1, R, SLOTS, SLOT_W) renderer array from joint values (e.g. interpolated between two ticks)."""
+    out = np.zeros((1, n, SLOTS, SLOT_W), np.float32)
+    for r in range(n):
+        h, w, a, c = q[r]
+        out[0, r] = slots_for(pose(h=h, wrist=w, arm=a, climb=c, hold=hold[r], alliance=0 if r < 3 else 1,
+                                   frame=frames[r], funnel=funnel[r]))
+    return out

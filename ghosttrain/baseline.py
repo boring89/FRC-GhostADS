@@ -85,7 +85,8 @@ class Baseline:
         nk = sn[None].repeat(n, 0)[np.arange(n)[:, None], np.arange(R)[None], k]
         upd = cost < best
         best = np.where(upd, cost, best); goal = np.where(upd, self.gi["coral_station"], goal)
-        xy = np.where(upd[..., None], xy_s, xy); yaw = np.where(upd, np.arctan2(-nk[..., 1], -nk[..., 0]), yaw)
+        face = np.arctan2(-nk[..., 1], -nk[..., 0]) + np.where(p.station_side < 0, np.pi, 0.0)   # funnel at the back
+        xy = np.where(upd[..., None], xy_s, xy); yaw = np.where(upd, geo.wrap(face), yaw)
         # reef algae (robots with algae_reef): stand at the nearest own face that still has algae, as for scoring
         ra = gs.reef_algae[env, al]                                                  # (N,R,6)
         fR, nR = g.reef_fc[ALLIANCE], g.reef_n[ALLIANCE]                              # (R,6,2)
@@ -127,7 +128,8 @@ class Baseline:
     def act(self, sim, plan=None):
         pos, yaw = sim.body.pose[..., :2], sim.body.pose[..., 2]
         goal, tgt, tyaw = plan if plan is not None else self.plan(sim)
-        return self._drive(sim, pos, yaw, tgt, tyaw), goal
+        hold_yaw = goal == self.gi["coral_station"]          # back into the station: keep the final heading all the way
+        return self._drive(sim, pos, yaw, tgt, tyaw, hold_yaw), goal
 
     def plan(self, sim):
         """Goal id, approach xy and yaw for every robot."""
@@ -241,7 +243,7 @@ class Baseline:
         dd = np.linalg.norm(d, axis=-1)
         return (dd < self._keepout_radius(hx)[..., None]).any(-1)
 
-    def _drive(self, sim, pos, yaw, tgt, tyaw):
+    def _drive(self, sim, pos, yaw, tgt, tyaw, hold_yaw=None):
         p, g = sim.prm, self.g
         n = pos.shape[0]
         vmax = p.max_v
@@ -281,6 +283,8 @@ class Baseline:
         trav = np.arctan2(v[..., 1], v[..., 0])
         far = (dist[..., 0] > 1.2)
         want = np.where(far & (sp[..., 0] > 0.3), trav, tyaw)
+        if hold_yaw is not None:
+            want = np.where(hold_yaw, tyaw, want)
         # near the target the yaw must be exact; slow translation while the heading error is large
         herr = geo.wrap(want - yaw)
         v *= np.clip(1.4 - np.abs(herr) / 1.2, 0.25, 1.0)[..., None] * np.where(dist < 0.7, 1.0, 1.0)

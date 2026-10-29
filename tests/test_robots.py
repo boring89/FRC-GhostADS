@@ -15,7 +15,8 @@ def test_ours_matches_design_spec():
     frame = (p.half[..., 0] * 2 - 2 * 3.25 * IN) / IN               # frame side in inches
     assert 29.0 <= frame.min() and frame.max() <= 30.0 and frame.std() > 0.1     # 254 binder: 29.5 in frame
     assert (p.half[..., 0] == p.half[..., 1]).all()                  # square
-    assert p.levels.all() and p.net.all() and p.floor_coral.all() and p.floor_algae.all() and p.station.all()
+    assert p.levels.all() and p.net.all() and p.floor_algae.all() and p.station.all()
+    assert not p.floor_coral.any() and (p.station_side == -1).all()        # 6328 layout: back funnel, no coral ground intake
     assert p.processor.all() and p.algae_reef.all() and (p.climb == 2).all()     # 254: deep cage climb (binder p.17)
     assert (p.processor == p.processor[0, 0]).all() and (p.algae_reef == p.algae_reef[0, 0]).all()   # fixed, not randomised
     assert (p.max_v <= 0.95 * p.free_speed + 1e-9).all()

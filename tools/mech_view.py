@@ -10,18 +10,22 @@ from pathlib import Path
 
 import numpy as np
 
-from ghostsim.mechanism import COL, WRIST_MIN_DEG, all_faces, pose
+from ghostsim.mechanism import ARM, COL, H_MAX, all_faces, pose
+from ghostsim.mechanism_state import SCORE
 
 LIGHT = np.array([-0.45, 0.6, 1.0])
 LIGHT = LIGHT / np.linalg.norm(LIGHT)
 
 POSES = {
-    "stowed": dict(h=0.0, theta=80.0, psi=75.0, hold=None),
-    "ground_coral": dict(h=0.0, theta=-10.0, psi=-10.0, hold=None),
-    "L4_coral": dict(h=1.40, theta=0.0, psi=75.0, hold="coral"),
-    "L2_coral": dict(h=0.40, theta=-5.0, psi=75.0, hold="coral"),
-    "processor_algae": dict(h=0.0, theta=round(WRIST_MIN_DEG, 1), psi=75.0, hold="algae"),
-    "net_algae": dict(h=1.40, theta=20.0, psi=75.0, hold="algae"),
+    "stowed": dict(),
+    "station_funnel": dict(funnel=0.55),
+    "L2_coral": dict(h=SCORE["score_L2"][0], wrist=SCORE["score_L2"][1], hold="coral"),
+    "L4_coral": dict(h=SCORE["score_L4"][0], wrist=SCORE["score_L4"][1], hold="coral"),
+    "algae_floor": dict(arm=ARM["floor"]),
+    "algae_hold": dict(arm=ARM["hold"], hold="algae"),
+    "net_fling": dict(arm=ARM["net"], hold="algae"),
+    "red_climb": dict(climb=15.0, alliance=1),
+    "full_up": dict(h=H_MAX, hold="both", arm=ARM["hold"]),
 }
 
 
@@ -35,7 +39,7 @@ def _camera(eye, target, up=(0, 0, 1.0), f=1.0):
     return eye, fwd, right, upv
 
 
-def render(solids, size=(900, 700), eye=(2.5, -2.0, 2.3), target=(0.0, 0.0, 0.8), focal=1.5):
+def render(solids, size=(900, 700), eye=(2.2, -2.4, 2.0), target=(0.0, 0.0, 0.8), focal=1.5):
     import cv2
     W, H = size
     eye, fwd, right, upv = _camera(eye, target)
@@ -78,10 +82,10 @@ def label(img, text):
 
 
 def parse_pose(s):
-    kw = {"h": 0.0, "theta": 0.0, "psi": 75.0, "hold": None}
+    kw = {}
     for part in s.split(","):
         k, v = part.split("=")
-        kw[k] = None if (k == "hold" and v == "none") else (v if k == "hold" else float(v))
+        kw[k] = (None if v == "none" else v) if k == "hold" else (int(v) if k == "alliance" else float(v))
     return kw
 
 
@@ -89,7 +93,7 @@ def main(argv=None) -> int:
     import cv2
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/mech")
-    ap.add_argument("--pose", help="one custom pose, e.g. h=0.8,theta=-20,psi=-10,hold=coral")
+    ap.add_argument("--pose", help="one custom pose, e.g. h=0.8,wrist=-35,arm=10,hold=coral")
     a = ap.parse_args(argv)
     if a.pose:
         kw = parse_pose(a.pose)

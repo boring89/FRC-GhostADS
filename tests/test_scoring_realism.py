@@ -1,7 +1,7 @@
 """Scoring realism: stop to place, drive-to-pose time, misses, floor intakes, reef render poses."""
 import numpy as np
 
-from conftest import at_branch, idle, make_sim, place, run
+from conftest import at_branch, at_station, idle, make_sim, place, run
 from test_penalties import _clear_others
 
 
@@ -87,9 +87,8 @@ def test_missed_score_drops_the_coral_next_to_the_robot():
 
 def test_missed_station_pickup_leaves_a_floor_coral():
     sim = make_sim()
-    g, gs = sim.game, sim.gs
-    c, n = g.station_c[0, 0], g.station_n[0, 0]
-    place(sim, 0, c + n * (sim.prm.half[0, 0, 0] + 0.1), np.arctan2(-n[1], -n[0]))
+    gs = sim.gs
+    at_station(sim, 0)
     sim.prm.succ[:, 0, gid(sim, "coral_station")] = 0.0
     stock, floor0 = gs.stock[0, 0], gs.coral.active[0].sum()
     st, gl = idle(sim)

@@ -1,89 +1,99 @@
-"""Geometry checks of the cube-built mechanism model (ghostsim/mechanism.py)."""
+"""Geometry checks of the mechanism model (ghostsim/mechanism.py, 6328-style layout)."""
 import numpy as np
 import pytest
 
-from ghostsim.mechanism import (ALGAE_R, EE_LEN, FRAME, H_MAX, INTAKE_LEN, PERIMETER_HALF, PIVOT_EE_Z0,
-                                WRIST_MIN_DEG, Box, Sphere, ee_wrist, intake_tip, pose)
+from ghostsim.mechanism import (ALGAE_R, ARM, BLUE, BUMPER_T, CORAL_R, FRAME, H_MAX, PERIMETER_HALF, RED, SLOTS, STAGES,
+                                STOW, Box, Cyl, Sphere, arm_tip, ball_in_arm, coral_held, funnel_point, pose, slots_for)
+from ghostsim.mechanism_state import CORAL_AT, SCORE
 
-BRANCH_TOP = {"trough": 18.0 * 0.0254, "L2": 31.875 * 0.0254, "L3": 47.625 * 0.0254, "L4": 72.0 * 0.0254}
-
-
-def tip(h, theta):
-    P, _ = ee_wrist(h)
-    t = np.radians(theta)
-    return P + EE_LEN * np.array([np.cos(t), 0.0, np.sin(t)])
+IN = 0.0254
+PIECES = ("coral", "algae")
 
 
-def roller(psi):
-    return [s for s in pose(psi=psi) if isinstance(s, Box) and s.name == "intake_roller"][0]
+def robot(solids):
+    return [s for s in solids if s.name not in PIECES]
 
 
-def solids_min_z(solids):
-    return min(s.min_z() for s in solids)
-
-
-@pytest.mark.parametrize("h", np.linspace(0, H_MAX, 5))
-@pytest.mark.parametrize("theta", np.linspace(WRIST_MIN_DEG, 90, 6))
-@pytest.mark.parametrize("hold", [None, "coral", "algae"])
-def test_operating_range_keeps_everything_above_the_floor(h, theta, hold):
-    for psi in (-10, 0, 40, 75):
-        assert solids_min_z(pose(h=h, theta=theta, psi=psi, hold=hold)) > -1e-6
-
-
-def test_wrist_below_limit_drives_a_held_algae_into_the_floor():
-    # documents why WRIST_MIN_DEG exists: below it the held algae would pass through the floor at h=0
-    assert solids_min_z(pose(h=0, theta=WRIST_MIN_DEG - 20, psi=-10, hold="algae")) < 0
-
-
-def test_intake_roller_touches_floor_when_deployed():
-    r = roller(-10)
-    assert 0.0 <= r.min_z() < 0.01                       # on the floor, not through it
-
-
-def test_intake_extension_within_r105():
-    # R105: no more than 1 ft 6 in beyond the ROBOT PERIMETER (frame edge, bumpers excluded)
-    assert roller(-10).min_x() >= -(PERIMETER_HALF + 0.457)
+@pytest.mark.parametrize("h", np.linspace(0, H_MAX, 4))
+@pytest.mark.parametrize("wrist", [-40.0, -20.0, 0.0])
+@pytest.mark.parametrize("hold", [None, "coral", "algae", "both"])
+def test_operating_range_keeps_everything_above_the_floor(h, wrist, hold):
+    for arm in (ARM["floor"], ARM["processor"], ARM["hold"], ARM["catch"], ARM["stow"], ARM["net"]):
+        for climb in (15.0, 60.0, 95.0):
+            assert min(s.min_z() for s in pose(h=h, wrist=wrist, arm=arm, climb=climb, hold=hold)) > -1e-6
 
 
 def test_starting_configuration_height_r104():
     # R104: starting configuration no taller than 3 ft 6 in (1.067 m)
-    top = max(max(s.corners()[:, 2].max() if isinstance(s, Box) else s.center[2] + s.radius for s in pose(h=0, theta=80, psi=75)), 0)
-    assert top <= 1.067
+    assert max(s.max_z() for s in pose(**STOW)) <= 1.067
 
 
-def test_frame_inside_25_27_in():
-    frame = [s for s in pose() if isinstance(s, Box) and s.name == "chassis"][0]
-    assert 29 * 0.0254 <= 2 * frame.half[0] <= 30 * 0.0254 + 1e-9
+def test_algae_arm_extension_within_r105():
+    # R105: no more than 1 ft 6 in beyond the frame perimeter (bumpers excluded); game pieces are not robot parts
+    for arm in ARM.values():
+        assert max(s.max_x() for s in robot(pose(arm=arm))) <= PERIMETER_HALF + 18 * IN + 1e-9
 
 
-@pytest.mark.parametrize("level", ["trough", "L2", "L3", "L4"])
-def test_end_effector_reaches_every_scoring_height(level):
-    # L2-L4: an elevator height puts the wrist tip exactly at the branch top with theta = 0 (horizontal).
-    # The trough (18 in) is below the wrist pivot at h=0, so it uses a slightly downward wrist angle instead.
-    target = BRANCH_TOP[level]
-    if level == "trough":
-        h = 0.0
-        theta = np.degrees(np.arcsin((target - PIVOT_EE_Z0) / EE_LEN))
-        assert WRIST_MIN_DEG <= theta < 0
-        assert abs(tip(h, theta)[2] - target) < 1e-9
-        return
-    h = target - PIVOT_EE_Z0                             # wrist tip height at theta=0 is PIVOT_EE_Z0 + h
+def test_algae_arm_reaches_the_floor_and_cradles_a_ball():
+    roller = [s for s in pose(arm=ARM["floor"]) if s.name == "arm_roller"][0]
+    assert 0.0 <= roller.min_z() < 0.03
+    assert arm_tip(ARM["floor"])[0] > PERIMETER_HALF + BUMPER_T                  # in front of the bumper
+    b = ball_in_arm(ARM["hold"])
+    assert b[2] > ALGAE_R and b[0] > PERIMETER_HALF                             # held in front, off the floor
+
+
+def test_elevator_stages_stay_nested():
+    """Cascade: every stage overlaps the one it rides in, and the carriage stays inside the innermost stage."""
+    for h in np.linspace(0, H_MAX, 7):
+        spans = [(z0 + k * h, z1 + k * h) for _, _, _, _, z0, z1, k in STAGES]
+        for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+            assert b0 < a1 - 0.25                                               # >= 25 cm overlap
+        car = [s for s in pose(h=h) if s.name == "carriage"]
+        assert max(s.max_z() for s in car) <= spans[-1][1] + 1e-9
+
+
+@pytest.mark.parametrize("goal", list(CORAL_AT))
+def test_score_poses_put_the_coral_at_each_level(goal):
+    h, w = SCORE[goal]
     assert 0.0 <= h <= H_MAX
-    assert abs(tip(h, 0.0)[2] - target) < 1e-9
+    c = coral_held(h, w)
+    assert abs(c[2] - CORAL_AT[goal][0]) < 1e-9
+    assert c[0] > 0.2                                                          # in front of the elevator
 
 
-def test_processor_pose_holds_algae_above_floor():
-    # processor opening sits at 7 in (0.18 m): at the processor pose the held algae centre is about 0.21 m up
-    s = [x for x in pose(h=0.0, theta=WRIST_MIN_DEG, hold="algae") if isinstance(x, Sphere)][0]
-    assert s.center[2] >= ALGAE_R - 1e-9 and s.center[2] < 0.25
+def test_funnel_feeds_the_dispenser_from_the_back():
+    top, bot = funnel_point(0.0), funnel_point(1.0)
+    assert top[0] < -PERIMETER_HALF + 0.05 and top[2] < 37.5 * IN + 0.06        # just under the station chute exit
+    assert bot[0] > top[0] and bot[2] < top[2]
+    assert abs(bot[2] - coral_held(0.0, 0.0)[2]) < 0.06                         # level with the dispenser at h = 0
 
 
-def test_held_algae_is_a_sphere_on_the_end_effector():
-    spheres = [s for s in pose(h=0.5, theta=10, hold="algae") if isinstance(s, Sphere)]
-    assert len(spheres) == 1 and abs(spheres[0].radius - ALGAE_R) < 1e-9
+def test_bumpers_follow_alliance_and_frame_size():
+    for alliance, col in ((0, BLUE), (1, RED)):
+        b = [s for s in pose(alliance=alliance) if s.name == "bumper"]
+        assert len(b) == 4 and all(s.color == col for s in b)
+    small = 25 * IN
+    b = [s for s in pose(frame=small) if s.name == "bumper"]
+    assert abs(max(s.max_x() for s in b) - (small / 2 + BUMPER_T)) < 1e-9
 
 
-def test_intake_arm_length_and_stow():
-    P = np.array([-0.30, 0.0, 0.13])
-    assert abs(np.linalg.norm(intake_tip(np.radians(75)) - P) - INTAKE_LEN) < 1e-9
-    assert intake_tip(np.radians(75))[2] > intake_tip(np.radians(-10))[2]
+def test_held_pieces():
+    assert sum(isinstance(s, Sphere) for s in pose(hold="algae")) == 1
+    coral = [s for s in pose(hold="both", funnel=0.5) if s.name == "coral"]
+    assert len(coral) == 2 and all(isinstance(s, Cyl) and abs(s.radius - CORAL_R) < 1e-9 for s in coral)
+
+
+def test_slots_layout():
+    solids = pose(h=0.5, wrist=-20, hold="both", funnel=0.3)
+    assert len(solids) <= SLOTS
+    s = slots_for(solids)
+    assert s[:, 0].sum() == len(solids)
+    kinds = s[: len(solids), 1]
+    assert (kinds == 1).sum() == 1 and (kinds == 2).sum() == sum(isinstance(x, Cyl) for x in solids)
+    for row in s[: len(solids)]:
+        R = row[8:17].reshape(3, 3)
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-5)
+    # a wheel cylinder: axis along robot y = Godot -z, so its Godot local Y (the CylinderMesh axis) is along z
+    i = next(k for k, x in enumerate(solids) if x.name == "wheel")
+    assert abs(abs(s[i, 8:17].reshape(3, 3)[2, 1]) - 1.0) < 1e-6
+    assert FRAME == 29.5 * IN and isinstance(solids[0], Box)

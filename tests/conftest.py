@@ -21,6 +21,7 @@ def make_sim(n=1, sensors=False, seed=0, full=True, perfect=True, **kw):
     if full:
         p = sim.prm
         p.processor[:], p.algae_reef[:], p.climb[:] = True, True, 2
+        p.floor_coral[:], p.floor_algae[:] = True, True
         sim.gs.cage_deep[:] = True
         p.times[:] = np.minimum(p.times, 1.0)
     if perfect:
@@ -64,6 +65,15 @@ def at_branch(sim, r, a, f, side=1, gap=0.1):
     half_pipe = g.cfg["field"]["reef"]["pipe_spacing"] * 0.0254 / 2
     xy = g.reef_fc[a, f] + n * (hx + gap) + t * side * half_pipe
     place(sim, r, xy, np.arctan2(-n[1], -n[0]))
+
+
+def at_station(sim, r, a=0, k=0, gap=0.1):
+    """Robot r in front of coral station k of alliance a, presenting its intake side (robots/*.json station_side:
+    our robot loads through a funnel at the back)."""
+    g = sim.game
+    c, n = g.station_c[a, k], g.station_n[a, k]
+    yaw = np.arctan2(-n[1], -n[0]) if sim.prm.station_side[0, r] > 0 else np.arctan2(n[1], n[0])
+    place(sim, r, c + n * (sim.prm.half[0, r, 0] + gap), yaw)
 
 
 def idle(sim):

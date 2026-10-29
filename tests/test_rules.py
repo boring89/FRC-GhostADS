@@ -1,7 +1,7 @@
 """REEFSCAPE rules (game/2025/rules.py) scenario tests."""
 import numpy as np
 
-from conftest import at_branch, at_face, idle, make_sim, place, run
+from conftest import at_branch, at_face, at_station, idle, make_sim, place, run
 from ghostsim import SimCfg, VecSim
 
 
@@ -76,14 +76,27 @@ def test_must_face_the_reef(sim):
 
 
 def test_station_intake(sim):
-    g = sim.game
-    c, n = g.station_c[0, 0], g.station_n[0, 0]
-    place(sim, 0, c + n * (sim.prm.half[0, 0, 0] + 0.1), np.arctan2(-n[1], -n[0]))
+    at_station(sim, 0)
     stock = sim.gs.stock[0, 0]
     st, gl = idle(sim)
     gl[:, 0] = gid(sim, "coral_station")
     run(sim, st, gl, 10)
     assert sim.gs.hold_coral[0, 0] and sim.gs.stock[0, 0] == stock - 1
+
+
+def test_our_robot_loads_coral_through_the_back_funnel(sim):
+    """robots/ours.json station_side back: facing the station with the front does not load; backing in does."""
+    g = sim.game
+    assert sim.prm.station_side[0, 0] < 0
+    c, n = g.station_c[0, 0], g.station_n[0, 0]
+    place(sim, 0, c + n * (sim.prm.half[0, 0, 0] + 0.1), np.arctan2(-n[1], -n[0]))      # front to the station
+    st, gl = idle(sim)
+    gl[:, 0] = gid(sim, "coral_station")
+    run(sim, st, gl, 15)
+    assert not sim.gs.hold_coral[0, 0]
+    at_station(sim, 0)
+    run(sim, st, gl, 10)
+    assert sim.gs.hold_coral[0, 0]
 
 
 def test_processor_then_opponent_human_player(sim):

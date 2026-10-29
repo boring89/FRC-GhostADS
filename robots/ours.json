@@ -32,9 +32,9 @@
   "deadband": 0.05
  },
  "mechanism": {
-  "station_side": "front",
+  "station_side": "back",
   "station": true,
-  "floor_coral": true,
+  "floor_coral": false,
   "floor_algae": true,
   "algae_reef": true,
   "processor": true,
@@ -64,14 +64,14 @@
   "intake_half_width_m": 0.3,
   "held_offset_m": {
    "coral": [
-    0.15,
+    0.27,
     0.0,
-    0.45
+    0.465
    ],
    "algae": [
-    0.2,
+    0.54,
     0.0,
-    0.6
+    0.53
    ]
   },
   "success_p": {
@@ -245,5 +245,6 @@
   "intake": "binder p.13: deploy ~0.15 s, ~15 ft/s roller surface",
   "end_effector": "binder p.18: wrist 210 deg in ~0.2 s, coral wheel ~13 ft/s",
   "climb": "binder p.17: deep cage climber (claw + winch)"
- }
+ },
+ "_note_layout": "Mechanism layout after FRC 6328 (2025): funnel at the BACK (the robot backs into the coral station, no turn between station and reef), cascade elevator with a coral dispenser scoring over the FRONT, algae arm at the front (floor algae, cradles one ball), deep-cage climber. No coral ground intake (floor_coral false). Drive and timing numbers stay the FRC 254 ones above. Geometry: ghostsim/mechanism.py."
 }

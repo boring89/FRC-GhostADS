@@ -6,7 +6,7 @@ extends Node
 
 const MAGIC := "GHST"
 const BUMPER_T := 0.08
-const SLOTS := 32                 # solids per robot (ghostsim/mechanism.py SLOTS)
+const SLOTS := 48                 # solids per robot (ghostsim/mechanism.py SLOTS)
 const SLOT_W := 20                # floats per solid: visible, kind, centre(3), half|radius(3), basis cols(9), colour(3)
 const FONTS := ["DejaVu Sans", "Liberation Sans", "Noto Sans", "FreeSans", "Ubuntu", "DejaVu Serif",
 		"Liberation Serif", "Noto Sans Mono", "DejaVu Sans Mono", "Cantarell"]
@@ -347,7 +347,7 @@ func prism(verts: Array, z0: float, z1: float) -> ArrayMesh:
 
 
 # ---------------------------------------------------------------- appearance / DR
-## 254-style mechanism: a fixed pool of unit boxes and unit spheres per robot, posed every frame from the "mech" array.
+## Robot mechanism: a fixed pool of unit boxes, spheres and cylinders per robot, posed every frame from the "mech" array.
 func make_mech_pool(parent: Node3D) -> Array:
 	var pool := []
 	for i in SLOTS:
@@ -366,7 +366,18 @@ func make_mech_pool(parent: Node3D) -> Array:
 		sph.material_override = mat(Color.WHITE, 0.5, 0.3)
 		sph.visible = false
 		parent.add_child(sph)
-		pool.append([box, sph])
+		var cyl := MeshInstance3D.new()
+		var cy := CylinderMesh.new()
+		cy.top_radius = 0.5
+		cy.bottom_radius = 0.5
+		cy.height = 1.0
+		cy.radial_segments = 16
+		cy.rings = 1
+		cyl.mesh = cy
+		cyl.material_override = mat(Color.WHITE, 0.5, 0.3)
+		cyl.visible = false
+		parent.add_child(cyl)
+		pool.append([box, sph, cyl])
 	return pool
 
 
@@ -534,25 +545,26 @@ func place_env(ei: int, a: Dictionary, check: bool, echo: Array) -> void:
 				var o := ((ei * 6 + r) * SLOTS + i) * SLOT_W
 				var box: MeshInstance3D = pool[i][0]
 				var sph: MeshInstance3D = pool[i][1]
+				var cyl: MeshInstance3D = pool[i][2]
+				box.visible = false
+				sph.visible = false
+				cyl.visible = false
 				if mm_[o] < 0.5:
-					box.visible = false
-					sph.visible = false
 					continue
 				var col := Color(mm_[o + 17], mm_[o + 18], mm_[o + 19])
 				var origin := Vector3(mm_[o + 2], mm_[o + 3], mm_[o + 4])
-				if mm_[o + 1] < 0.5:                   # box: basis columns scaled by full size
+				if mm_[o + 1] > 0.5 and mm_[o + 1] < 1.5:    # sphere (algae)
+					sph.transform = Transform3D(Basis.from_scale(Vector3.ONE * 2.0 * mm_[o + 5]), origin)
+					sph.visible = true
+					(sph.material_override as StandardMaterial3D).albedo_color = col
+				else:                                  # box or cylinder (axis = local Y): basis columns scaled by full size
 					var bx := Vector3(mm_[o + 8], mm_[o + 11], mm_[o + 14]) * (2.0 * mm_[o + 5])
 					var by := Vector3(mm_[o + 9], mm_[o + 12], mm_[o + 15]) * (2.0 * mm_[o + 6])
 					var bz := Vector3(mm_[o + 10], mm_[o + 13], mm_[o + 16]) * (2.0 * mm_[o + 7])
-					box.transform = Transform3D(Basis(bx, by, bz), origin)
-					box.visible = true
-					sph.visible = false
-					(box.material_override as StandardMaterial3D).albedo_color = col
-				else:                                  # sphere (algae)
-					sph.transform = Transform3D(Basis.from_scale(Vector3.ONE * 2.0 * mm_[o + 5]), origin)
-					sph.visible = true
-					box.visible = false
-					(sph.material_override as StandardMaterial3D).albedo_color = col
+					var mi: MeshInstance3D = box if mm_[o + 1] < 0.5 else cyl
+					mi.transform = Transform3D(Basis(bx, by, bz), origin)
+					mi.visible = true
+					(mi.material_override as StandardMaterial3D).albedo_color = col
 	var cor: PackedFloat32Array = a["coral"]
 	var mm: MultiMesh = e["coral"].multimesh
 	var nc := mm.instance_count

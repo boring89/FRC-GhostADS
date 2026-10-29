@@ -1,26 +1,21 @@
-"""Animation timeline: every sampled frame is physically legal and inside the joint ranges."""
+"""Animation (tools/mech_anim.py, the live view's JointTracker on a script): every frame is legal and the coral leaves
+the dispenser at L4 height."""
 import numpy as np
 
-from ghostsim.mechanism import H_MAX, WRIST_MIN_DEG
-from tools.mech_anim import solids_at, timeline
+from ghostsim.mechanism import H_MAX, coral_held
+from ghostsim.mechanism_state import CORAL_AT
+from tools.mech_anim import frames
 
 
-def test_every_frame_is_legal():
-    for t in np.arange(0.0, timeline(), 0.1):
-        solids, st, _ = solids_at(t)
-        assert -1e-4 < min(s.min_z() for s in solids), f"t={t:.2f} something below the floor"
-        assert 0.0 <= st.h <= H_MAX + 1e-9
-        assert WRIST_MIN_DEG - 1e-9 <= st.theta <= 90.0 + 1e-9
-        assert -10.0 - 1e-9 <= st.psi <= 75.0 + 1e-9
-
-
-def test_coral_released_at_l4_height_and_algae_taken_at_wrist_limit():
-    from ghostsim.mechanism import EE_LEN, ee_wrist
-    _, st, seg = solids_at(6.9)
-    assert seg["name"].startswith("score coral")
-    P, _ = ee_wrist(st.h)
-    tip_z = P[2] + EE_LEN * np.sin(np.radians(st.theta))
-    assert abs(tip_z - 72 * 0.0254) < 0.01                  # L4 branch top, within 1 cm
-    _, st, seg = solids_at(10.8)
-    assert seg["name"].startswith("algae into processor")
-    assert abs(st.theta - WRIST_MIN_DEG) < 1e-6 and st.h == 0.0
+def test_every_frame_is_legal_and_coral_released_at_l4():
+    released, prev_coral = None, None
+    for t, name, solids, tr in frames():
+        assert min(s.min_z() for s in solids) > -1e-6, f"t={t:.2f} {name}: below the floor"
+        h, w, a, c = tr.q[0]
+        assert 0.0 <= h <= H_MAX + 1e-9
+        has = any(s.name == "coral" and abs(s.center[2] - coral_held(h, w)[2]) < 1e-9 for s in solids)
+        if prev_coral and not has and "released on L4" in name and released is None:
+            released = coral_held(h, w)[2]
+        prev_coral = has
+    assert released is not None and abs(released - CORAL_AT["score_L4"][0]) < 0.02
+    assert np.isfinite(released)

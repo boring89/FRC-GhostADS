@@ -37,6 +37,17 @@ def robot_status(sim, r, goal):
     return d
 
 
+def mech_inputs(sim):
+    """JointTracker.update arguments for env 0: the goal the rules executed, dwell progress, held pieces, hanging,
+    and whether the nearest own reef face holds its algae high."""
+    gs, g = sim.gs, sim.game
+    from ghostsim.robots import ALLIANCE
+    prog = np.where(gs.timer[0] > 0, gs.timer[0] / np.maximum(gs.need[0], 1e-6), 0.0)
+    d = np.linalg.norm(g.reef_fc[ALLIANCE] - sim.body.pose[0, :, None, :2], axis=-1)        # (R,6)
+    high = g.algae_high[np.argmin(d, -1)]
+    return gs.timer_goal[0], np.clip(prog, 0.0, 1.0), gs.hold_coral[0], gs.hold_algae[0], gs.climbed[0], high
+
+
 def pov_data(sim, r):
     """Camera pose and the tags the detector sees for robot r (same visibility rule as ghostsim.sensors)."""
     if sim.sens is None:
@@ -91,7 +102,8 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
         conn.send({"kind": "match", "appearance": appearance})
         goal = np.zeros((1, R), int)
         res = {"done": np.array([False])}
-        joints = JointTracker(game.goals, R)                  # 254 mechanism pose for the renderer (not used by training)
+        joints = JointTracker(game.goals, R)                  # mechanism pose for the renderer (not used by training)
+        frames = (2 * (sim.prm.half[0, :, 0] - sim.ours["bumper_t_in"] * 0.0254)).tolist()
         # match clock target: advances by the wall time that passed while watching (never by sim.t itself;
         # that re-counted each tick's overshoot and ran the match ~3x faster than real time)
         t_wall = time.time()
@@ -115,13 +127,16 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
                     stick = np.clip((mu + net.log_std.exp() * torch.randn_like(mu)).numpy().reshape(1, R, 3), -1, 1)
                 res = w.step(stick, goal)
                 o = res["obs"]
-                joints.update(goal[0], sim.gs.hold_coral[0], sim.gs.hold_algae[0], TICK_S)
+                joints.update(*mech_inputs(sim), dt=TICK_S)
                 r_sel = int(sel.value)
-                snap = {"t": float(sim.t[0]), "state": sim.render_state(), "score": sim.score[0].copy(),
+                state = sim.render_state()
+                for key, k0 in (("coral", game.kc), ("algae", game.ka)):      # held pieces: drawn by the mechanism
+                    state[key][:, k0:k0 + R, -1] = 0.0
+                snap = {"t": float(sim.t[0]), "state": state, "score": sim.score[0].copy(),
                         "cats": sim.gs.cat[0].copy(), "goal": goal[0].copy(),
                         "status": [robot_status(sim, r, goal) for r in range(R)],
                         "pov": pov_data(sim, r_sel), "sel": r_sel, "wall": time.time(),
-                        "mech": joints.slots()}
+                        "mech": {**joints.state(), "frames": frames}}
                 conn.send({"kind": "tick", "snap": snap})
                 if res["done"].any():
                     break

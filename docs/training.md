@@ -110,13 +110,27 @@ inference on GPU is slow while Godot renders on the same GPU.
 - teacher4 checkpoints (runs/teacher4/iter_0000{10,20,30}.pt) were trained on the old 26 in robot: not compatible
   with the 254 robot physics; BC and MAPPO must be redone.
 
-## Live view shows the 254 robot (mechanism + animation)
-- `ghostsim/mechanism_state.py`: joint tracker in the broadcast sim process only (not physics, not observations).
-  Elevator / wrist / intake move toward a per-goal target at 254 timing rates (4.4 m/s, 1050 deg/s, 600 deg/s).
-- `ghostsim/mechanism.py`: `slots_for` converts the robot's solids to Godot axes; `ghostrender/godot/main.gd` poses a fixed
-  pool of 32 boxes/spheres per robot every frame. The old team-label/clutter robot is no longer drawn.
-- Not drawn yet: climber claw, the 4-bar intake (single arm now). Robot frame size is fixed at 29.5 in in the drawing.
-- Live fps with the 254 model, training running (nice, 12 sim procs): ~25 fps (was ~26.7 before the mechanism).
+## Live view: 6328-style robot model and animation
+- `ghostsim/mechanism.py`: our robot after FRC 6328's 2025 layout, from boxes, cylinders and spheres: swerve base,
+  alliance-coloured bumpers sized to each robot's frame, cascade elevator (blue outer, orange stage 2 at h/3, grey
+  stage 3 at 2h/3, carriage at h; 1.50 m travel, 1.06 m starting height, R104), coral dispenser on a wrist, funnel at
+  the back, algae arm at the front (floor pick-up, cradles one ball, stays inside R105), deep-cage climber on the left.
+  Every robot on the field is drawn with it.
+- Rules: our robot loads coral through the back funnel (`robots/ours.json station_side back`): it backs into the coral
+  station and drives to the reef without turning. The baseline keeps the final heading all the way to the station.
+  No coral ground intake for now (`floor_coral false`; set it back to true to re-enable it in the rules).
+- `ghostsim/mechanism_state.py`: joints move only while the rules dwell on the current goal (the robot is in place and
+  stopped), following the dwell progress (score pose at 70 %, the piece leaves at 100 %), hold the pose 0.35 s after a
+  release, then return to the carry pose. While driving nothing moves whatever goal the policy names (before: the
+  elevator went up as soon as a score goal was picked and jittered as the goal changed on the way). Rate limits: elevator
+  3 m/s, wrist 300 deg/s, arm 360 deg/s. A coral slides down the funnel during a station dwell.
+- Broadcast: the simulation process sends joint values per tick (`mech`); the renderer interpolates them between
+  ticks like the robot poses and builds the solids per frame (4.5 ms for 6 robots). Before, the geometry was sent per
+  tick and the elevator jumped 0.44 m per tick. Held pieces are drawn by the mechanism only (the rules' held-piece
+  markers are hidden in the live view). Measured: 28.5 fps at 1280x720 with the new model (no training running).
+- `ghostrender/godot/main.gd`: pool of 48 boxes / spheres / cylinders per robot.
+- `tools/mech_view.py` (PNG poses) and `tools/mech_anim.py` (video of the real tracker on a scripted station -> L4 ->
+  algae -> processor -> climb sequence).
 
 ## Result card fix
 - The worker auto-resets when a match ends, so the card read 0-0. `_Worker.step` now also returns `final_cat` (category

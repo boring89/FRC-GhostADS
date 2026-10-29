@@ -21,6 +21,7 @@ class State:
         z, b, i = (lambda *s: np.zeros(s)), (lambda *s: np.zeros(s, bool)), (lambda *s: np.zeros(s, np.int64))
         self.hold_coral, self.hold_algae, self.climbed = b(n, R), b(n, R), b(n, R)
         self.timer, self.timer_goal = z(n, R), i(n, R)
+        self.need = z(n, R)                               # dwell the current goal needs (incl. drive-to-pose); animation
         self.stock = i(n, 2)
         self.coral = Pieces(z(n, kc, 2), z(n, kc, 2), z(n, kc), b(n, kc))
         self.algae = Pieces(z(n, ka, 2), z(n, ka, 2), z(n, ka), b(n, ka))
@@ -415,6 +416,7 @@ class Game(GameBase):
             need = np.where(sel("algae_reef"), need + align_t(np.abs(lat), gap_r, ang_r), need)
             need = np.where(sel("coral_station"), need + align_t(0.0, gap_s, ang_s), need)
             need = np.where(sel("processor"), need + align_t(np.abs(lat_p), gap_p, ang_p), need)
+        st.need = need
         fire = c & (st.timer >= need)
         st.timer[fire] = 0.0
 
