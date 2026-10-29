@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, fields
 import numpy as np
 
 from .game import load
-from .motion import motion_layer
+from .motion import filter_stick, motion_layer
 from .physics import Physics, PhysCfg
 from .robots import ALLIANCE, R, load_profile, sample_params
 from .sensors import Sensors
@@ -61,6 +61,7 @@ class VecSim:
         self.auto_done = np.zeros(n, bool)
         self.substep_hook = None                              # optional callable(), called after every physics substep (spectator views)
         self.tgt_az = np.zeros((n, R, 4))
+        self.cmd = np.zeros((n, R, 3))                        # filtered policy stick (robot code state, observed)
         self.reset()
 
     # ------------------------------------------------------------------ reset
@@ -76,6 +77,7 @@ class VecSim:
         self.t[idx] = 0.0 if self.mode == "auto" else self.game.auto_s
         self.auto_done[idx] = self.mode != "auto"
         self.tgt_az[idx] = 0.0
+        self.cmd[idx] = 0.0
         self.body.fixed[idx] = False
         if self.sens:
             self.sens.reset(idx, self.body, self.prm)
@@ -86,15 +88,24 @@ class VecSim:
         n = c.n_envs
         stick = np.nan_to_num(np.asarray(stick, float))
         goal = np.clip(np.asarray(goal, np.int64), 0, len(g.goals) - 1)
+        own = np.zeros((n, R), bool)                         # robots driven by their own controller this step
         if g.model.get("auto_align", False):
             from .align import apply as align_apply
-            stick, goal = align_apply(self, stick, goal)    # auto-align: policy's align goal drives the robot
+            ctl, goal = align_apply(self, stick, goal)      # auto-align: policy's align goal drives the robot
+            own = (ctl != stick).any(-1)
+        p_ = self.prm
         pts, fouls, bonus = np.zeros((n, R)), np.zeros((n, R)), np.zeros((n, 2))
         for _ in range(c.substeps):
             live = self.t < self.end_t - 1e-9
+            # the policy stick goes through the command filter every control period; auto-align bypasses it
+            # (and the filter continues from the executed command, so there is no jump when the policy takes over)
+            self.cmd = filter_stick(self.cmd, stick, p_.max_v, p_.max_w, p_.cmd_tau, p_.cmd_accel, p_.cmd_alpha, c.dt)
+            if own.any():
+                self.cmd = np.where(own[..., None], ctl, self.cmd)
+            self.cmd[~live] = 0.0
             yaw = self.sens.est[..., 2] if self.sens else b.pose[..., 2]
             az = self.sens.az if self.sens else b.az
-            spd, ang = motion_layer(stick, ALLIANCE[None], yaw, az, self.tgt_az, self.prm.control(), c.dt)
+            spd, ang = motion_layer(self.cmd, ALLIANCE[None], yaw, az, self.tgt_az, self.prm.control(), c.dt)
             spd[~live] = 0.0                                   # robots are disabled after the match
             self.tgt_az = ang
             b.fixed = g.fixed(self.gs).copy()
@@ -131,6 +142,7 @@ class VecSim:
 
     def sensor_obs(self, robots=(0,)) -> dict:
         o = self.sens.obs(self.game.holding(self.gs), self.match_features())
+        o["cmd"] = self.cmd.astype(np.float32)                 # the robot code knows its own filtered command
         return {k: v[:, list(robots)] for k, v in o.items()}
 
     @property

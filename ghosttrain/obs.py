@@ -3,7 +3,7 @@
 The field is 180-degree rotationally symmetric, so every viewer sees the world as if it were blue
 (red: p -> [L, W] - p, angles + pi). Features are entity sets so the network does not depend on slot order:
 
-  self      (N,R,S)        own state, capabilities, current goal one-hot, timers, scores
+  self      (N,R,S)        own state, capabilities, current goal one-hot, timers, scores, filtered stick command
   others    (N,R,5,Fo)     2 allies then 3 opponents, in the ego frame; Fo = 23 features + 13 intent
                            probabilities (allies only, from ghosttrain/intent.py, zeros for opponents)
   pieces    (N,R,30,Fp)    12 floor coral + 18 floor algae slots (+ mask)
@@ -19,7 +19,7 @@ import numpy as np
 from ghostsim import geometry as geo
 from ghostsim.robots import ALLIANCE, R
 
-S, FP, FF, FL = 48, 6, 15, 12                                # S: self features incl. 14-goal one-hot + 4 align
+S, FP, FF, FL = 51, 6, 15, 12                                # S: self features incl. 14-goal one-hot + 4 align + 3 cmd
 FO_RAW = 23                                       # per-other features before the intent block
 N_GOALS = 14                                      # game.json goals (checked in Encoder): 13 + align_score
 FO = FO_RAW + N_GOALS                             # 36
@@ -131,7 +131,8 @@ class Encoder:
             tprog[..., None], np.broadcast_to(t_left[:, None, None], (n, R, 1)), np.broadcast_to(is_auto[:, None, None], (n, R, 1)),
             np.broadcast_to(endg[:, None, None], (n, R, 1)), own_sc[..., None] / 100.0, opp_sc[..., None] / 100.0,
             own_stock[..., None] / 60.0, hp_own[..., None] / 18.0,
-            *self._align_feats(sim, pos_w, yaw_w)], -1).astype(np.float32)
+            *self._align_feats(sim, pos_w, yaw_w),
+            sim.cmd], -1).astype(np.float32)                 # command filter state (alliance-relative stick units)
         assert selfv.shape[-1] == S, selfv.shape
 
         # others

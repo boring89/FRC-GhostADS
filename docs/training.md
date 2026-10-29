@@ -200,6 +200,22 @@ Checked against the 2025 manual section 7 (V11).
   the anomaly thresholds are now score > 350 or fouls > 60 (250 / 40 flagged almost every match).
 - Not modelled: G435 (human player stores at most 4 algae), G419/G420 (anchors, net contact), G422-G424, G426.
 
+## Command filter between the policy and the chassis (ghostsim/motion.py `filter_stick`)
+- The policy's stick (10 Hz, sampled with exploration noise during training) went straight into the swerve motion
+  layer, so the robots jittered. Now the robot code filters it every control period (50 Hz), like a WPILib LinearFilter
+  + SlewRateLimiter: first-order low-pass (tau 0.15 s), then the change is limited to 8 m/s^2 (translation, as a
+  vector) and 30 rad/s^2 (rotation). Parameters: `robots/ours.json control.cmd_*` (others inherit them).
+- Auto-align (`align_score`) drives the robot with its own controller and bypasses the filter; the filter continues
+  from the executed command, so there is no jump when the policy takes over again.
+- The filter state is part of the observation (`self` gained 3 features, S = 48 -> 51; the student's sensor
+  observation has `cmd`), so the problem stays Markov: the policy knows its command is still ramping.
+  Checkpoints trained before this change do not load (input size).
+- Java port contract: `tests/golden/cmd_filter_v1.json` (`tests/make_golden.py`; motion_v1.json is unchanged).
+- Measured, steady half-speed command + exploration-size noise (std 0.11): acceleration jitter 2.65 -> 1.34 m/s^2,
+  yaw-rate std 0.38 -> 0.19 rad/s; slow sideways drift (3.5 cm) is unchanged (low-frequency, not filtered).
+  Baseline vs baseline score 127.5 -> 122.6 per alliance; the solo calibration of robots/others.json is unchanged
+  within noise (0.30 / 0.36 / 0.60 / 0.75 / 0.94).
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.

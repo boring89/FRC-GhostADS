@@ -37,6 +37,7 @@ class RobotParams:
     steer_rate: np.ndarray; mu_s: np.ndarray; mu_k: np.ndarray
     v_oc: np.ndarray; r_int: np.ndarray; other_load: np.ndarray
     max_v: np.ndarray; max_w: np.ndarray; deadband: np.ndarray
+    cmd_tau: np.ndarray; cmd_accel: np.ndarray; cmd_alpha: np.ndarray
     levels: np.ndarray; station: np.ndarray; floor_coral: np.ndarray; floor_algae: np.ndarray; algae_reef: np.ndarray
     processor: np.ndarray; net: np.ndarray; climb: np.ndarray; station_side: np.ndarray
     times: np.ndarray; succ: np.ndarray; align_scale: np.ndarray; intake_depth: np.ndarray; intake_half_width: np.ndarray
@@ -93,6 +94,7 @@ def sample_params(profiles: list[dict], n: int, goals: list[str], rng, randomize
                 "v_oc": p["battery"]["v_oc"], "r_int": p["battery"]["r_int_ohm"], "other_load": p["battery"]["other_load_A"],
                 "max_v": min(num("control.max_speed_mps"), 0.95 * free), "max_w": num("control.max_omega_radps"),
                 "deadband": ctl["deadband"],
+                "cmd_tau": ctl["cmd_tau_s"], "cmd_accel": ctl["cmd_accel_mps2"], "cmd_alpha": ctl["cmd_alpha_radps2"],
                 "station_side": 1.0 if mech["station_side"] == "front" else -1.0,
                 "intake_depth": mech["intake_depth_m"], "intake_half_width": mech["intake_half_width_m"],
             }

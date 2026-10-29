@@ -1,10 +1,11 @@
-"""Regenerate tests/golden/motion_v1.json (the contract the Systemcore Java motion layer must reproduce)."""
+"""Regenerate tests/golden/motion_v1.json and cmd_filter_v1.json (the contracts the Systemcore Java motion layer and
+command filter must reproduce)."""
 import json
 from pathlib import Path
 
 import numpy as np
 
-from ghostsim.motion import motion_layer
+from ghostsim.motion import filter_stick, motion_layer
 
 OFF = [[0.29, 0.29], [0.29, -0.29], [-0.29, 0.29], [-0.29, -0.29]]
 
@@ -30,6 +31,24 @@ def main():
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(out, indent=1))
     print("wrote", path, len(cases), "cases")
+    filter_golden()
+
+
+def filter_golden():
+    """A command filter run over 60 periods of a stick sequence (steps, reversals, noise), per robot parameters."""
+    rng = np.random.default_rng(2026)
+    params = {"max_v": 3.8, "max_w": 9.0, "tau": 0.15, "accel": 8.0, "alpha": 30.0}
+    seq = [[0, 0, 0]] * 3 + [[1, 0, 0]] * 15 + [[-1, 0.5, 1]] * 12 + [[0, 0, 0]] * 10 \
+        + rng.uniform(-1, 1, (20, 3)).round(4).tolist()
+    cmd, out = np.zeros(3), []
+    for st in seq:
+        cmd = filter_stick(cmd, np.array(st, float), params["max_v"], params["max_w"], params["tau"], params["accel"],
+                           params["alpha"], 0.02)
+        out.append(cmd.tolist())
+    path = Path(__file__).parent / "golden" / "cmd_filter_v1.json"
+    path.write_text(json.dumps({"version": 1, "dt": 0.02, "params": params, "units": "stick units, s, m/s^2, rad/s^2",
+                                "stick": seq, "cmd": out}, indent=1))
+    print("wrote", path, len(seq), "periods")
 
 
 if __name__ == "__main__":

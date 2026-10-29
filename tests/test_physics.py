@@ -22,6 +22,7 @@ def test_accel_top_speed_and_battery_sag(sim):
 def test_wheel_slip_shows_in_encoders(sim):
     sim.prm.mu_s[:] = 0.3
     sim.prm.mu_k[:] = 0.25
+    sim.prm.cmd_tau[:], sim.prm.cmd_accel[:], sim.prm.cmd_alpha[:] = 1e-6, 1e6, 1e6   # physics only: filter pass-through
     st, gl = idle(sim)
     st[:, 0, 0] = 1.0
     sim.step(st, gl)

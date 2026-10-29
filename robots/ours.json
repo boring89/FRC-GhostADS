@@ -29,7 +29,11 @@
  "control": {
   "max_speed_mps": 4.0,
   "max_omega_radps": 9.0,
-  "deadband": 0.05
+  "deadband": 0.05,
+  "cmd_tau_s": 0.15,
+  "cmd_accel_mps2": 8.0,
+  "cmd_alpha_radps2": 30.0,
+  "_cmd_filter": "Policy stick filter in the robot code (ghostsim/motion.py filter_stick): low-pass tau, then slew limits on the commanded acceleration. Smooths the 10 Hz policy output; part of the observation (self.cmd)."
  },
  "mechanism": {
   "station_side": "back",

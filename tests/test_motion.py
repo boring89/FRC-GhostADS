@@ -56,3 +56,33 @@ def test_golden_vectors():
         spd, ang = m.motion_layer(np.array(case["stick"]), np.array(case["alliance"]), np.array(case["yaw"]),
                                   np.array(case["current_angle"]), np.array(case["prev_target_angle"]), p, gold["dt"])
         assert np.allclose(spd, case["speed"], atol=1e-9) and np.allclose(ang, case["angle"], atol=1e-9)
+
+
+FILTER = Path(__file__).parent / "golden" / "cmd_filter_v1.json"
+
+
+def test_command_filter_golden():
+    gold = json.loads(FILTER.read_text())
+    p, cmd = gold["params"], np.zeros(3)
+    for st, want in zip(gold["stick"], gold["cmd"]):
+        cmd = m.filter_stick(cmd, np.array(st), p["max_v"], p["max_w"], p["tau"], p["accel"], p["alpha"], gold["dt"])
+        assert np.allclose(cmd, want, atol=1e-12)
+
+
+def test_command_filter_limits_acceleration_and_smooths_jitter():
+    max_v, max_w, tau, acc, alpha, dt = 3.8, 9.0, 0.15, 8.0, 30.0, 0.02
+    f = lambda c, s: m.filter_stick(c, s, max_v, max_w, tau, acc, alpha, dt)
+    # step to full forward: never faster than accel, reaches > 95 % within 1 s
+    cmd, prev, hist = np.zeros(3), np.zeros(3), []
+    for _ in range(50):
+        cmd = f(cmd, np.array([1.0, 0.0, 1.0]))
+        assert np.linalg.norm(cmd[:2] - prev[:2]) * max_v / dt <= acc + 1e-9
+        assert abs(cmd[2] - prev[2]) * max_w / dt <= alpha + 1e-9
+        prev = cmd.copy()
+    assert cmd[0] > 0.95 and cmd[2] > 0.95
+    # a policy flipping between +-0.3 every 0.1 s (5 periods): the command swings far less than the input
+    cmd, xs = np.zeros(3), []
+    for k in range(200):
+        cmd = f(cmd, np.array([0.3 if (k // 5) % 2 == 0 else -0.3, 0.0, 0.0]))
+        xs.append(cmd[0])
+    assert np.ptp(xs[100:]) < 0.5 * 0.6

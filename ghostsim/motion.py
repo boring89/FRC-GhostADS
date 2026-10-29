@@ -1,6 +1,7 @@
 """Systemcore-equivalent motion layer. Mirrors the WPILib swerve pipeline so the Java port
 can be checked against tests/golden/motion_v1.json:
 
+  policy stick -> filter_stick (low-pass + slew limit, stateful, every control period)
   stick -> MathUtil.applyDeadband -> unit-disk clamp -> scale
   -> alliance flip (red: rotate 180 deg, field is rotationally symmetric)
   -> ChassisSpeeds.fromFieldRelativeSpeeds(yaw_estimate)
@@ -74,6 +75,23 @@ def optimize(spd, ang, current):
 
 def cosine_scale(spd, ang, current):
     return spd * np.cos(ang - current)
+
+
+def filter_stick(cmd, stick, max_v, max_w, tau, accel, alpha, dt):
+    """Command filter between the policy and the motion layer, run every control period (robot code, like a WPILib
+    LinearFilter + SlewRateLimiter on the joystick). cmd, stick (...,3) alliance-relative [forward, left, ccw] in
+    stick units; returns the new cmd. First-order low-pass with time constant tau [s], then the change per period is
+    limited to accel [m/s^2] (translation, as a 2D vector) and alpha [rad/s^2] (rotation), converted to stick units
+    with the robot's max_v / max_w. Contract for the Java port: tests/golden/cmd_filter_v1.json."""
+    cmd, stick = np.asarray(cmd, float), np.clip(np.asarray(stick, float), -1.0, 1.0)
+    a = 1.0 - np.exp(-dt / np.asarray(tau, float))
+    d = (stick - cmd) * np.asarray(a)[..., None]
+    lim_xy = np.asarray(accel, float) * dt / np.asarray(max_v, float)
+    n = np.linalg.norm(d[..., :2], axis=-1)
+    d_xy = d[..., :2] * np.minimum(1.0, lim_xy / np.maximum(n, 1e-12))[..., None]
+    lim_w = np.asarray(alpha, float) * dt / np.asarray(max_w, float)
+    d_w = np.clip(d[..., 2], -lim_w, lim_w)
+    return cmd + np.concatenate([d_xy, d_w[..., None]], -1)
 
 
 def motion_layer(stick, alliance, yaw_est, current_angle, prev_target_angle, p, dt):
