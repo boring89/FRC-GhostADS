@@ -1,11 +1,40 @@
+# Python environment and bytecode
 .venv/
 __pycache__/
 *.pyc
-.pytest_cache/
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Training outputs, checkpoints, logs, datasets (large, regenerated)
 runs/
 data/
+*.pt
+*.out
+*.log
+*.jsonl
+
+# Renderer outputs and media produced by tools
+*.mp4
+*.gif
+*.avi
+frames/
+
+# Godot: editor/import caches and the downloaded engine
 tools/godot/
 ghostrender/godot/.godot/
+ghostrender/godot/*.import
+ghostrender/godot/export_presets.cfg
+
+# Large CAD sources (kept locally, see docs/field_export.md)
 REEFSCAPE FIELD*.glb
 game/2025/visual/
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
