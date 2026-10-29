@@ -6,8 +6,9 @@ extends Node
 
 const MAGIC := "GHST"
 const BUMPER_T := 0.08
-const SLOTS := 48                 # solids per robot (ghostsim/mechanism.py SLOTS)
+const SLOTS := 64                 # solids per robot (ghostsim/mechanism.py SLOTS)
 const SLOT_W := 20                # floats per solid: visible, kind, centre(3), half|radius(3), basis cols(9), colour(3)
+const KIND_BODY := 3              # kind 3 + i: robot.glb body i (ghostsim/mechanism.py BODIES), basis = full linear map
 const FONTS := ["DejaVu Sans", "Liberation Sans", "Noto Sans", "FreeSans", "Ubuntu", "DejaVu Serif",
 		"Liberation Serif", "Noto Sans Mono", "DejaVu Sans Mono", "Cantarell"]
 
@@ -26,6 +27,8 @@ var pieces := {}
 var tag_bits := {}
 var post_shader: Shader
 var visual_template: Node3D
+var robot_template: Node3D        # robot.glb (tools/prepare_robot.py): one child node per body
+var robot_bodies: Array = []
 
 
 func _ready() -> void:
@@ -145,6 +148,19 @@ func configure(h: Dictionary) -> void:
 		else:
 			visual_template = doc.generate_scene(gst)
 			print("GHOST_RENDER_GLB_OK ", glb)
+	if robot_template:
+		robot_template.queue_free()
+		robot_template = null
+	robot_bodies = h.get("robot_bodies", [])
+	var rglb: String = h.get("robot_glb", "")
+	if rglb != "":
+		var rdoc := GLTFDocument.new()
+		var rst := GLTFState.new()
+		if rdoc.append_from_file(rglb, rst) != OK:
+			push_error("robot GLB load failed: %s" % rglb)
+		else:
+			robot_template = rdoc.generate_scene(rst)
+			print("GHOST_RENDER_ROBOT_OK ", rglb)
 	rigs = h["rigs"]
 	tag_bits = h["tag_bits"]
 	for e in envs:
@@ -234,11 +250,13 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 	vp.add_child(dyn)
 	var robots := []
 	var mech_pool := []
+	var bodies := []
 	for r in 6:
 		var n := Node3D.new()
 		dyn.add_child(n)
 		robots.append(n)
 		mech_pool.append(make_mech_pool(n))
+		bodies.append(make_bodies(n))
 	var coral := multimesh(CylinderMesh.new(), int(pieces["mc"]), mat(Color(0.95, 0.95, 0.93), 0.6), false)
 	var cm: CylinderMesh = coral.multimesh.mesh
 	cm.top_radius = pieces["coral_od"] / 2.0
@@ -266,7 +284,8 @@ func build_env(scene: Dictionary, tags_tex: Dictionary) -> Dictionary:
 	var crowd := multimesh(BoxMesh.new(), 0, mat(Color.WHITE, 0.9), true)
 	crowd.material_override.vertex_color_use_as_albedo = true
 	vp.add_child(crowd)
-	return {"vp": vp, "world": vp.find_world_3d(), "static": stat, "dyn": dyn, "robots": robots, "mech": mech_pool, "coral": coral,
+	return {"vp": vp, "world": vp.find_world_3d(), "static": stat, "dyn": dyn, "robots": robots, "mech": mech_pool,
+			"bodies": bodies, "coral": coral,
 			"algae": algae, "cages": cages, "markers": markers, "crowd": crowd, "env": env, "sun": sun, "mats": mats}
 
 
@@ -381,6 +400,24 @@ func make_mech_pool(parent: Node3D) -> Array:
 		parent.add_child(cyl)
 		pool.append([box, sph, cyl])
 	return pool
+
+
+## Robot bodies: a copy of robot.glb per robot, one hidden node per body (meshes in robot-local Godot axes), posed
+## every frame by the "mech" rows of kind KIND_BODY + i.
+func make_bodies(parent: Node3D) -> Array:
+	var out := []
+	if robot_template == null:
+		return out
+	var inst := robot_template.duplicate()
+	parent.add_child(inst)
+	for name in robot_bodies:
+		var b: Node3D = inst.find_child(str(name), true, false)
+		if b == null:
+			b = Node3D.new()
+			inst.add_child(b)
+		b.visible = false
+		out.append(b)
+	return out
 
 
 func appearance(h: Dictionary) -> void:
@@ -547,6 +584,9 @@ func place_env(ei: int, a: Dictionary, check: bool, echo: Array) -> void:
 		var mm_: PackedFloat32Array = a["mech"]
 		for r in 6:
 			var pool: Array = e["mech"][r]
+			var bods: Array = e["bodies"][r]
+			for b in bods:
+				b.visible = false
 			for i in SLOTS:
 				var o := ((ei * 6 + r) * SLOTS + i) * SLOT_W
 				var box: MeshInstance3D = pool[i][0]
@@ -556,6 +596,15 @@ func place_env(ei: int, a: Dictionary, check: bool, echo: Array) -> void:
 				sph.visible = false
 				cyl.visible = false
 				if mm_[o] < 0.5:
+					continue
+				if mm_[o + 1] > KIND_BODY - 0.5:          # robot.glb body: full linear map, no colour
+					var bi := int(mm_[o + 1] - KIND_BODY + 0.5)
+					if bi < bods.size():
+						var bn: Node3D = bods[bi]
+						bn.transform = Transform3D(Basis(Vector3(mm_[o + 8], mm_[o + 11], mm_[o + 14]),
+								Vector3(mm_[o + 9], mm_[o + 12], mm_[o + 15]), Vector3(mm_[o + 10], mm_[o + 13], mm_[o + 16])),
+								Vector3(mm_[o + 2], mm_[o + 3], mm_[o + 4]))
+						bn.visible = true
 					continue
 				var col := Color(mm_[o + 17], mm_[o + 18], mm_[o + 19])
 				var origin := Vector3(mm_[o + 2], mm_[o + 3], mm_[o + 4])

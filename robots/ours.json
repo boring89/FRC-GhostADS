@@ -68,14 +68,14 @@
   "intake_half_width_m": 0.3,
   "held_offset_m": {
    "coral": [
-    0.27,
-    0.0,
-    0.465
+    0.167,
+    0.046,
+    0.325
    ],
    "algae": [
-    0.54,
-    0.0,
-    0.53
+    0.511,
+    0.046,
+    0.485
    ]
   },
   "success_p": {
@@ -250,5 +250,5 @@
   "end_effector": "binder p.18: wrist 210 deg in ~0.2 s, coral wheel ~13 ft/s",
   "climb": "binder p.17: deep cage climber (claw + winch)"
  },
- "_note_layout": "Mechanism layout after FRC 6328 (2025): funnel at the BACK (the robot backs into the coral station, no turn between station and reef), cascade elevator with a coral dispenser scoring over the FRONT, algae arm at the front (floor algae, cradles one ball), deep-cage climber. No coral ground intake (floor_coral false). Drive and timing numbers stay the FRC 254 ones above. Geometry: ghostsim/mechanism.py."
+ "_note_layout": "Mechanism layout of FRC 6328's 2025 robot (CAD 6328-25B-0000, tools/prepare_robot.py): hopper at the BACK (the robot backs into the coral station, no turn between station and reef), full-width 3-stage elevator leaning 8 deg forward, effector on the carriage scoring coral over the FRONT and holding algae in front of it (floor algae with the effector nose down), deep-cage climber at the back. No coral ground intake (floor_coral false). held_offset_m = carry pose of mechanism.py. Drive and timing numbers stay the FRC 254 ones above. Geometry: ghostsim/mechanism.py."
 }

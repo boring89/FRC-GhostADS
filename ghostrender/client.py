@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ghostsim.mechanism import BODIES
 from ghostsim.sensors import rot_rpy
 
 from . import protocol
@@ -64,9 +65,12 @@ class RenderClient:
         return protocol.recv(self.sock)
 
     def configure(self, game, cameras: list[dict], n_envs: int, width=160, height=120, max_cams=24, visual="auto", msaa=0,
-                  fxaa=False):
+                  fxaa=False, robot="box"):
         """visual: "auto" (CAD model if game/<year>/visual/field.glb exists), "cad", "hi" (the detailed field_hi.glb when
-        present, for the live view; else as "auto"), "proxy" (procedural), or a path to a .glb."""
+        present, for the live view; else as "auto"), "proxy" (procedural), or a path to a .glb.
+        robot: how the "mech" array draws the robots: "box" (box model), "auto" (robot.glb from
+        tools/prepare_robot.py when it exists), "cad", or a path to a .glb. self.robot tells the caller which one to
+        send (ghostsim.mechanism_state.mech_slots(..., cad=client.robot == "cad"))."""
         IN = 0.0254
         pc, f = game.cfg["pieces"], game.cfg["field"]
         bits = json.loads((game.dir / "tag36h11_bits.json").read_text())["bits"]
@@ -80,12 +84,17 @@ class RenderClient:
         if use_cad and not glb.exists():
             raise FileNotFoundError(f"{glb} missing: run tools/prepare_field.py")
         self.visual = "cad" if use_cad else "proxy"
+        rglb = Path(robot) if str(robot).endswith(".glb") else game.dir / "visual" / "robot.glb"
+        if robot == "cad" and not rglb.exists():
+            raise FileNotFoundError(f"{rglb} missing: run tools/prepare_robot.py")
+        self.robot = "cad" if (robot in ("cad", "auto") or str(robot).endswith(".glb")) and rglb.exists() else "box"
         self.W, self.H, self.n_envs, self.cameras = width, height, n_envs, cameras
         self.rigs = [rig_dict(c) for c in cameras]
         h, _ = self._call({
             "type": "configure", "version": protocol.VERSION, "n_envs": n_envs, "width": width, "height": height,
             "max_cams": max_cams, "scene": game.scene(cad=use_cad), "rigs": self.rigs, "tag_bits": bits,
             "visual_glb": str(glb) if use_cad else "", "msaa": int(msaa), "fxaa": bool(fxaa),
+            "robot_glb": str(rglb) if self.robot == "cad" else "", "robot_bodies": list(BODIES),
             "pieces": {"mc": game.kc + 6 + game.branch_pose[..., 0].size + game.l1_pose[..., 0].size,   # floor, held, branches, trough
                        "ma": game.ka + 6 + game.reef_algae_pose[..., 0].size, "coral_od": pc["coral"]["od"] * IN, "coral_len": pc["coral"]["length"] * IN,
                        "algae_d": pc["algae"]["diameter"] * IN, "cage_size": f["cages"]["size"] * IN,
@@ -103,7 +112,7 @@ class RenderClient:
         configure) replacing the configured rig of each camera for this render (None keeps it).
         Returns (K,H,W,3) uint8, header."""
         arrays = {k: state[k] for k in ("robots", "coral", "algae", "cages")}
-        if "mech" in state:                              # 254 mechanism geometry (per robot solids), optional
+        if "mech" in state:                              # mechanism rows per robot (ghostsim/mechanism.py), optional
             arrays["mech"] = state["mech"]
         if markers is not None:
             arrays["markers"] = markers

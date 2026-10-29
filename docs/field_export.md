@@ -42,3 +42,17 @@ Quality notes: the polycarbonate guardrail is modelled opaque in the source (no 
 so cameras cannot see through it (they can on the real field).
 Rendering cost (GTX 1070, 6 envs x 4 cameras at 160x120, simulation stepping included): old field.glb 301 images/s,
 new field.glb 294, field_hi.glb 207. Live view 1280x720 with field_hi.glb: 24 fps (28.5 with the old, broken field).
+
+## Robot visual (live view)
+`tools/prepare_robot.py <Onshape glTF export>` writes `game/2025/visual/robot.glb` from a robot CAD (FRC 6328's
+2025 robot, `6328-25B-0000.gltf`, 6.6 M drawn triangles, Draco-compressed: needs DracoPy). Frames: Onshape Z up,
++Y robot front, +X robot right, origin on the floor at the frame centre -> robot frame (x, y, z) = (cad_y, -cad_x,
+cad_z) -> glTF Y-up; both rotations, the winding stays. Parts are sorted into the mechanism bodies
+(`ghostsim/mechanism.py BODIES`) by sub-assembly name; inside the elevator by the named stage tubes and, for the other
+parts, by where they sit between the tubes (lower bearing blocks move with the inner stage, upper ones stay on the
+outer). Fasteners and parts < 2 cm are dropped. Every unique part gets levels of detail (quadric decimation or
+vertex clustering, whichever keeps its surface area) and the tool picks, for the budget (`--budget`, 150 k), the
+levels that lose the least surface anywhere: a single decimation ratio opened the pocketed effector plates and the
+drilled tubes into gaps while motors and bearings kept thousands of triangles. It prints the joint geometry it finds
+(elevator tilt, effector and climber pivots, coral channel, stowed height) next to the constants of
+`ghostsim/mechanism.py`, which must be updated by hand for a different CAD. Test: `tests/test_prepare_robot.py`.

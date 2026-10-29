@@ -9,6 +9,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "dracopy>=2.2.0",
     "fast-simplification>=0.2.0",
     "opencv-contrib-python-headless>=5.0.0.93",
     "pytest>=8",

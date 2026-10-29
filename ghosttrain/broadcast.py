@@ -288,11 +288,12 @@ class Broadcast:
         tags, tag_ids = tag_corners(game)
         rc_top = RenderClient(port=self.ports[0])     # separate Godot instances: same pid would share a port
         rc_top.configure(game, [top_rig(game, *self.top_size)], n_envs=1, width=self.top_size[0],
-                         height=self.top_size[1], max_cams=1, msaa=1, fxaa=True, visual="hi")
+                         height=self.top_size[1], max_cams=1, msaa=1, fxaa=True, visual="hi", robot="auto")
         rc_pov = RenderClient(port=self.ports[1])                 # the two follow cameras
         follow = follow_cams(game)
         rc_pov.configure(game, [look_rig(f.eye, [game.mid[0], game.mid[1], 0.5], 40.0) for f in follow], n_envs=1,
-                         width=TILE[0], height=TILE[1], max_cams=2, msaa=1, fxaa=True, visual="hi")
+                         width=TILE[0], height=TILE[1], max_cams=2, msaa=1, fxaa=True, visual="hi", robot="auto")
+        cad_robot = rc_top.robot == "cad" and rc_pov.robot == "cad"     # robot.glb bodies, else the box model
         t_prev = time.time()
         rc_robot = None                               # 640x480 client, started only when the robot page is open
         full_cam = robot_rig(self.pov_size)
@@ -351,7 +352,8 @@ class Broadcast:
                 if prev is not None:
                     state["robots"] = prev["state"]["robots"] + alpha * (latest["state"]["robots"] - prev["state"]["robots"])
                 mq = latest["mech"]["q"] if prev is None else prev["mech"]["q"] + alpha * (latest["mech"]["q"] - prev["mech"]["q"])
-                state["mech"] = mech_slots(mq, latest["mech"]["hold"], latest["mech"]["funnel"], latest["mech"]["frames"])
+                state["mech"] = mech_slots(mq, latest["mech"]["hold"], latest["mech"]["funnel"], latest["mech"]["frames"],
+                                           cad=cad_robot)
                 if time.time() >= pick["next"]:
                     pick.update(blue=int(self.rng.integers(0, 3)), red=int(self.rng.integers(3, 6)),
                                 next=time.time() + TILE_CHANGE_S)
@@ -376,7 +378,7 @@ class Broadcast:
                         rc_robot = RenderClient(port=self.ports[2])
                         clients.append(rc_robot)
                         rc_robot.configure(game, [full_cam], n_envs=1, width=self.pov_size[0], height=self.pov_size[1],
-                                           max_cams=1, msaa=0, visual="hi")
+                                           max_cams=1, msaa=0, visual="hi", robot="cad" if cad_robot else "box")
                         if appearance is not None:
                             rc_robot.set_appearance(0, *appearance)
                     img_rob, _ = rc_robot.render(state, [(0, latest["sel"], 0)])

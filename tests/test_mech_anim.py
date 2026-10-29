@@ -1,5 +1,5 @@
 """Animation (tools/mech_anim.py, the live view's JointTracker on a script): every frame is legal and the coral leaves
-the dispenser at L4 height."""
+the effector at L4 height."""
 import numpy as np
 
 from ghostsim.mechanism import H_MAX, coral_held
@@ -11,7 +11,7 @@ def test_every_frame_is_legal_and_coral_released_at_l4():
     released, prev_coral = None, None
     for t, name, solids, tr in frames():
         assert min(s.min_z() for s in solids) > -1e-6, f"t={t:.2f} {name}: below the floor"
-        h, w, a, c = tr.q[0]
+        h, w, c = tr.q[0]
         assert 0.0 <= h <= H_MAX + 1e-9
         has = any(s.name == "coral" and abs(s.center[2] - coral_held(h, w)[2]) < 1e-9 for s in solids)
         if prev_coral and not has and "released on L4" in name and released is None:

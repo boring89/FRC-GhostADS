@@ -119,31 +119,38 @@ inference on GPU is slow while Godot renders on the same GPU.
 - Robot unified with FRC 254 (2025 binder): 29.5 in frame, 4.02 m/s free speed, 52 in elevator (1.32 m), deep cage
   climb (`climb: deep`), times for coral/algae/score updated (placeholders where the binder is silent).
   Mass, friction and the exact placement times are still placeholders (`verified: false`).
-  The mechanism model follows the new frame and elevator. The climber is not drawn yet.
 - teacher4 checkpoints (runs/teacher4/iter_0000{10,20,30}.pt) were trained on the old 26 in robot: not compatible
   with the 254 robot physics; BC and MAPPO must be redone.
 
-## Live view: 6328-style robot model and animation
-- `ghostsim/mechanism.py`: our robot after FRC 6328's 2025 layout, from boxes, cylinders and spheres: swerve base,
-  alliance-coloured bumpers sized to each robot's frame, cascade elevator (blue outer, orange stage 2 at h/3, grey
-  stage 3 at 2h/3, carriage at h; 1.50 m travel, 1.06 m starting height, R104), coral dispenser on a wrist, funnel at
-  the back, algae arm at the front (floor pick-up, cradles one ball, stays inside R105), deep-cage climber on the left.
-  Every robot on the field is drawn with it.
-- Rules: our robot loads coral through the back funnel (`robots/ours.json station_side back`): it backs into the coral
-  station and drives to the reef without turning. The baseline keeps the final heading all the way to the station.
-  No coral ground intake for now (`floor_coral false`; set it back to true to re-enable it in the rules).
-- `ghostsim/mechanism_state.py`: joints move only while the rules dwell on the current goal (the robot is in place and
-  stopped), following the dwell progress (score pose at 70 %, the piece leaves at 100 %), hold the pose 0.35 s after a
-  release, then return to the carry pose. While driving nothing moves whatever goal the policy names (before: the
-  elevator went up as soon as a score goal was picked and jittered as the goal changed on the way). Rate limits: elevator
-  3 m/s, wrist 300 deg/s, arm 360 deg/s. A coral slides down the funnel during a station dwell.
-- Broadcast: the simulation process sends joint values per tick (`mech`); the renderer interpolates them between
-  ticks like the robot poses and builds the solids per frame (4.5 ms for 6 robots). Before, the geometry was sent per
-  tick and the elevator jumped 0.44 m per tick. Held pieces are drawn by the mechanism only (the rules' held-piece
-  markers are hidden in the live view). Measured: 28.5 fps at 1280x720 with the new model (no training running).
-- `ghostrender/godot/main.gd`: pool of 48 boxes / spheres / cylinders per robot.
-- `tools/mech_view.py` (PNG poses) and `tools/mech_anim.py` (video of the real tracker on a scripted station -> L4 ->
-  algae -> processor -> climb sequence).
+## Live view: FRC 6328's robot from its CAD
+- The live view draws our robot (and every other robot, scaled to its frame) from FRC 6328's 2025 CAD
+  (Onshape export `6328-25B-0000.gltf`): `tools/prepare_robot.py` turns it into `game/2025/visual/robot.glb`
+  (not committed, like the field; ~150 k triangles, 7 MB, ~3 min) with one mesh node per moving body: base
+  (drivetrain, hopper, fixed elevator stage), stage2, stage3, carriage, effector, climber. Without robot.glb the
+  renderer draws a box model of the same layout. Regenerate with:
+  `uv run python tools/prepare_robot.py ~/下載/6328-25B-0000.gltf` (needs the dev dependency DracoPy).
+- Layout (measured on the CAD, constants in `ghostsim/mechanism.py`): full-width 3-stage elevator (tubes at the frame
+  edge) leaning 8 deg forward: the bottom stays where it is and the top comes out over the front bumper, so at L4 the
+  coral is 0.23 m further forward than at the bottom (tip 6 cm past the bumper, over the branch). Effector on the
+  carriage, pitched by a wrist about its pivot: coral passes through its channel (fed from the hopper belt at the back,
+  out over the front), algae is held in front of it against its front wheel and top roller; there is no separate
+  algae arm (floor algae: effector nose down at h = 0). Hopper at the back (the robot backs into the station, coral
+  drops in and the belt feeds the effector). Deep-cage climber at the back. 0.94 m starting height (R104), 1.60 m
+  elevator travel, every pose inside R105.
+- Joints (`ghostsim/mechanism_state.py`): elevator h along the tilted axis (stage 2 h/3, stage 3 2h/3, carriage h),
+  wrist, climber; joint zero = the CAD pose (also the carry pose: coral channel in line with the hopper belt).
+  They move only while the rules dwell on the current goal (score pose at 70 % of the dwell, the piece leaves at
+  100 %, pose held 0.35 s after a release), never while driving. Score poses put the coral centre at each level with
+  the coral pitch of the branch; reef algae lifts the effector to the ball; net: full height, effector tips up; floor
+  intake: nose down during the intake dwell. Rate limits: elevator 3 m/s, wrist 300 deg/s, climber 120 deg/s.
+- Renderer: the "mech" array carries per robot either box-model solids or the six body transforms (kind 3 + body,
+  full linear map incl. the frame scale) plus bumpers and held pieces (`mech_slots(..., cad=True)`); Godot loads
+  robot.glb once (`robot="auto"` in `RenderClient.configure`, live view only; training cameras do not draw
+  mechanisms). 64 slots per robot. `robots/ours.json held_offset_m` = the carry pose of the effector.
+- `tools/mech_view.py` (box model, PNG poses) and `tools/mech_anim.py` (video of the real tracker on a scripted
+  station -> L4 -> floor algae -> processor -> climb sequence).
+- Earlier versions (before 2026-10-29 evening): a box model after 6328 pictures with a front algae arm, a funnel on
+  posts and a vertical elevator in the middle.
 
 ## Result card fix
 - The worker auto-resets when a match ends, so the card read 0-0. `_Worker.step` now also returns `final_cat` (category

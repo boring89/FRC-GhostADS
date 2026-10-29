@@ -4,9 +4,9 @@ scripted sequence of rule states (goal, dwell progress, held pieces), stepped at
     uv run python tools/mech_anim.py                  # -> runs/mech/anim.mp4 (30 fps)
     uv run python tools/mech_anim.py --frames-png 8   # also dump every 8th frame as PNG into runs/mech/frames/
 
-Story: back into the coral station (coral slides down the funnel), drive to the reef (nothing moves), dwell and score
-L4 (elevator rises with the dwell, coral leaves at the end), algae off the floor with the front arm, drive, processor,
-then climb.
+Story: back into the coral station (coral drops into the hopper and the belt feeds the effector), drive to the reef
+(nothing moves), dwell and score L4 (the tilted elevator rises with the dwell, coral leaves at the end), algae off the
+floor with the effector nose down, drive, processor, then climb.
 """
 from __future__ import annotations
 
@@ -26,13 +26,13 @@ GOALS = ["idle", "coral_station", "coral_floor", "algae_floor", "algae_reef", "s
 # (name, seconds, goal, dwell: None or (p0, p1), hold_coral, hold_algae, climbed); a dwell ends with the action firing
 SCRIPT = [
     ("driving to the station (carry pose)", 0.8, "coral_station", None, False, False, False),
-    ("backed into the station: coral slides down the funnel", 0.6, "coral_station", (0.0, 1.0), False, False, False),
+    ("backed into the station: coral drops into the hopper", 0.6, "coral_station", (0.0, 1.0), False, False, False),
     ("driving to the reef: nothing moves", 1.0, "score_L4", None, True, False, False),
     ("in place at the reef: elevator rises with the dwell", 0.9, "score_L4", (0.0, 1.0), True, False, False),
     ("coral released on L4, pose held, then back down", 1.4, "score_L4", None, False, False, False),
-    ("algae arm down, intaking from the floor", 0.9, "algae_floor", None, False, False, False),
-    ("driving with the algae cradled", 0.8, "processor", None, False, True, False),
-    ("processor: arm lowers", 0.5, "processor", (0.0, 1.0), False, True, False),
+    ("effector nose down, intaking algae from the floor", 0.9, "algae_floor", (0.0, 1.0), False, False, False),
+    ("driving with the algae held in front", 0.8, "processor", None, False, True, False),
+    ("processor: effector tips down", 0.5, "processor", (0.0, 1.0), False, True, False),
     ("released into the processor", 0.8, "processor", None, False, False, False),
     ("climber reaches for the cage", 1.0, "climb", None, False, False, False),
     ("hanging", 1.0, "climb", None, False, False, True),
@@ -52,8 +52,8 @@ def frames():
         for i in range(n):
             p = 0.0 if dwell is None else dwell[0] + (dwell[1] - dwell[0]) * (i + 1) / n
             tr.update([GOALS.index(goal)], [min(p, 0.999)], [hc], [ha], [cl], dt=1.0 / FPS)
-            h, w, a, c = tr.q[0]
-            yield t, name, pose(h=h, wrist=w, arm=a, climb=c, hold=tr.hold[0], funnel=tr.funnel[0]), tr
+            h, w, c = tr.q[0]
+            yield t, name, pose(h=h, wrist=w, climb=c, hold=tr.hold[0], funnel=tr.funnel[0]), tr
             t += 1.0 / FPS
 
 
