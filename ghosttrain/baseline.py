@@ -24,6 +24,8 @@ class Baseline:
         self.g, self.park_s, self.kp, self.accel = game, park_s, kp, accel
         self.algae_floor_bias, self.algae_reef_bias = algae_floor_bias, algae_reef_bias
         self.prefer_net = prefer_net        # biases 3.0 / 1.5 + net first: algae per alliance close to the 2025 Champs divisions
+        self.defaults = {"algae_floor_bias": algae_floor_bias, "algae_reef_bias": algae_reef_bias,
+                         "prefer_net": prefer_net, "park_s": park_s, "kp": kp}
         self.gi = {n: i for i, n in enumerate(game.goals)}
         obst = [game.polys.center[i] for i in range(len(game.polys))]
         rad = [1.55, 1.55, 0.75] + [0.45] * 6
@@ -32,6 +34,24 @@ class Baseline:
         self.opp_cage_xy = game.cage_xy[np.arange(6).reshape(2, 3)[1 - ALLIANCE]]          # (R,3,2) per robot slot
         self.cage_half_diag = game.cfg["field"]["cages"]["size"] * 0.0254 / 2 * np.sqrt(2)
         self.keepout_margin = 0.10
+
+    # ------------------------------------------------------------------ styles (partners of an independent learner)
+    STYLE_RANGES = {"algae_floor_bias": (1.5, 5.0), "algae_reef_bias": (0.8, 3.0), "park_s": (8.0, 20.0),
+                    "kp": (1.6, 2.8)}
+    STYLE_NET_P = 0.7
+
+    def restyle(self, n, mask, rng, on=True):
+        """Per-robot styles for the envs in `mask` (n,): random (on) or the defaults. Partners in independent training
+        are 'other teams': how much they go for algae, net vs processor, when they leave for the endgame, how hard
+        they drive. The parameters become (n, R) arrays on first use."""
+        if np.ndim(self.kp) == 0:
+            for k, v in self.defaults.items():
+                setattr(self, k, np.full((n, R), v, bool if k == "prefer_net" else float))
+        m = np.asarray(mask, bool)
+        k_ = int(m.sum())
+        for k, (lo, hi) in self.STYLE_RANGES.items():
+            getattr(self, k)[m] = rng.uniform(lo, hi, (k_, R)) if on else self.defaults[k]
+        self.prefer_net[m] = rng.random((k_, R)) < self.STYLE_NET_P if on else self.defaults["prefer_net"]
 
     # ------------------------------------------------------------------ helpers
     def _score_target(self, sim, pos, hx):
@@ -179,7 +199,7 @@ class Baseline:
         # endgame: park in the own barge zone
         zone_y = g.mid[1] + np.where(ALLIANCE == 0, 1.0, -1.0) * (0.8 + 1.0 * (np.arange(R) % 3))
         park_xy = np.stack([g.mid[0] + side * (g.bz_half + hx.mean() - 0.12), zone_y], -1)[None].repeat(n, 0)
-        endg = (sim.t >= sim.end_t - self.park_s)[:, None] & np.ones((n, R), bool)
+        endg = sim.t[:, None] >= (sim.end_t - self.park_s) * np.ones((n, R))
         # endgame: hang on a free own cage if this robot's climb capability fits the cage (6 / 12 pts, vs 2 for park)
         c_g, c_xy, c_yaw, c_ok = self._climb_target(sim, pos, hx)
         climb = endg & c_ok
@@ -249,7 +269,8 @@ class Baseline:
         vmax = p.max_v
         err = tgt - pos
         dist = np.linalg.norm(err, axis=-1, keepdims=True)
-        v = err / np.maximum(dist, 1e-9) * np.minimum(vmax[..., None], np.minimum(self.kp * dist, np.sqrt(2 * self.accel * dist)))
+        kp = self.kp[..., None] if np.ndim(self.kp) else self.kp
+        v = err / np.maximum(dist, 1e-9) * np.minimum(vmax[..., None], np.minimum(kp * dist, np.sqrt(2 * self.accel * dist)))
         att = np.clip((dist - 0.35) / 1.1, 0.0, 1.0)                              # ignore obstacles at the goal
         # robots
         d = pos[:, :, None] - pos[:, None]                                         # (N,R,R,2) from j to i

@@ -48,17 +48,18 @@ def keep_net(run: Path, it: int, snap: Path) -> Path:
     return dst
 
 
-def evaluate_once(run: Path, it: int, snap: Path, refs: dict, episodes: int, n_procs: int, log=print):
+def evaluate_once(run: Path, it: int, snap: Path, refs: dict, episodes: int, n_procs: int, log=print, team="ours"):
     row = {"it": it, "t": time.time()}
     for name, ref in refs.items():
         t0 = time.time()
-        r = play(str(snap), str(ref), episodes, n_procs=n_procs, envs_per_proc=max(1, episodes // (2 * n_procs)))
+        r = play(str(snap), str(ref), episodes, n_procs=n_procs, envs_per_proc=max(1, episodes // (2 * n_procs)),
+                 team=team)
         row[f"win_{name}"], row[f"diff_{name}"] = r["win"], r["diff"]
         row[f"diff_{name}_ci"], row[f"win_{name}_ci"] = r["diff_ci"], r["win_ci"]
         row[f"score_{name}"] = [r["score_a"], r["score_b"]]
         log(f"eval it {it} vs {name}: win {r['win']:.2f} diff {r['diff']:+.1f} "
             f"(CI {r['diff_ci'][0]:+.1f} to {r['diff_ci'][1]:+.1f}) [{time.time() - t0:.0f}s]")
-    row["episodes"] = episodes
+    row["episodes"], row["team"] = episodes, team
     return row
 
 
@@ -70,6 +71,7 @@ def main(argv=None) -> int:
     ap.add_argument("--episodes", type=int, default=96)
     ap.add_argument("--n_procs", type=int, default=4)
     ap.add_argument("--start", type=int, default=0, help="skip snapshots before this iteration")
+    ap.add_argument("--team", default="ours", choices=["ours", "all"], help="arena.py team mode (ours: our robot only)")
     ap.add_argument("--once", action="store_true", help="evaluate what is there, then exit")
     a = ap.parse_args(argv)
     run = Path(a.run)
@@ -90,7 +92,7 @@ def main(argv=None) -> int:
             if not snaps[it].exists():                        # pruned meanwhile
                 continue
             net = keep_net(run, it, snaps[it])
-            row = evaluate_once(run, it, net, refs, a.episodes, a.n_procs, log)
+            row = evaluate_once(run, it, net, refs, a.episodes, a.n_procs, log, a.team)
             row["prev_it"] = prev
             with open(out, "a") as f:
                 f.write(json.dumps(row) + "\n")

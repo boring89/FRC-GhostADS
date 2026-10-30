@@ -4,11 +4,13 @@ Input per (viewer, teammate) pair: the teammate's ego-frame features as the view
 holding, capabilities, distance; the 'others' row of obs.py, first FO_RAW values) + time left + endgame flag.
 Output: a distribution over the 13 goals. The teacher observation gets this distribution for its 2 allies.
 
-Trained on rule-based baseline matches (privileged goal labels) with a plain MLP. Weights are stored in
-ghosttrain/intent_weights.npz and evaluated in numpy, so the vectorised environment workers need no torch.
+Trained with a plain MLP on matches whose robots are driven like the partners of independent training: the
+baseline with random per-match styles and, with --net, a share of robots (--p_net) driven by a trained net
+(privileged goal labels: the goal each robot executed). Weights are stored in ghosttrain/intent_weights.npz and
+evaluated in numpy, so the vectorised environment workers need no torch.
 
-    uv run python -m ghosttrain.intent collect --envs 32 --steps 1500 --seed 100 --out runs/intent/val.npz
-    uv run python -m ghosttrain.intent collect --envs 96 --steps 1500 --seed 1 --out runs/intent/train.npz
+    uv run python -m ghosttrain.intent collect --envs 32 --steps 1500 --seed 100 --net runs/x/latest_net.pt --out runs/intent/val.npz
+    uv run python -m ghosttrain.intent collect --envs 96 --steps 1500 --seed 1 --net runs/x/latest_net.pt --out runs/intent/train.npz
     uv run python -m ghosttrain.intent train runs/intent/train.npz --val runs/intent/val.npz
 """
 from __future__ import annotations
@@ -45,32 +47,54 @@ def predict_np(w, x):
     return p.reshape(x.shape[:-1] + (w["W3"].shape[1],)).astype(np.float32)
 
 
-def collect(game_name="2025", n_envs=32, steps=1500, seed=0, noise=0.1):
-    """Baseline vs baseline. Returns X (M,RAW_FEATS) float32, Y (M,) goal ids, S (M,) 1 if goal is a scoring one."""
+def collect(game_name="2025", n_envs=32, steps=1500, seed=0, noise=0.1, styles=True, net_path=None, p_net=0.4):
+    """Returns X (M,RAW_FEATS) float32, Y (M,) goal ids, S (M,) 1 if goal is a scoring one. Robots: the baseline
+    (random styles per match if `styles`, stick noise `noise`) and, with `net_path`, a random share `p_net` of the
+    robots per match driven by that net (goals held for a second, as in training)."""
+    import torch
     from ghostsim import SimCfg, load
-    from ghostsim.robots import R
-    from ghostsim.sim import VecSim
+    from ghostsim.robots import ALLIANCE, R
 
-    from .baseline import Baseline
-    from .obs import OTHERS, Encoder
+    from .obs import OTHERS
+    from .vecenv import _Worker
     game = load(game_name)
-    sim = VecSim(SimCfg(n_envs=n_envs, sensors=False, seed=seed))
-    enc = Encoder(game, intent_weights=None)            # features do not depend on the intent input
-    bl = Baseline(game)
+    w = _Worker(SimCfg(n_envs=n_envs, sensors=False, seed=seed))
+    w.trunc_at[:] = 10 ** 9
+    w.noise = noise
     rng = np.random.default_rng(seed)
+    net = None
+    if net_path:
+        from .net import TeacherNet
+        net = TeacherNet(w.enc.n_goals, w.enc.G)
+        sd = torch.load(net_path, map_location="cpu", weights_only=False)
+        net.load_state_dict(sd["net"] if "net" in sd else sd)
+        net.eval()
+    keys = ("self", "others", "pieces", "pmask", "faces", "lm", "gmask")
+    by_net = np.zeros((n_envs, R), bool)
+
+    def draw(mask):
+        by_net[mask] = (rng.random((int(mask.sum()), R)) < p_net) if net is not None else False
+        w.set_ctrl(~by_net, styles=styles)
+    draw(np.ones(n_envs, bool))
+    o = w.reset()
     scoring_ids = np.array([game.goals.index(g) for g in SCORING])
     Xs, Ys = [], []
     for k in range(steps):
-        stick, goal = bl.act(sim, bl.plan(sim))
-        if noise > 0:                                    # small stick noise: more varied teammate states
-            stick = np.clip(stick + rng.normal(0, noise, stick.shape), -1, 1)
-        enc.encode(sim, goal)
-        tf = enc.last_teammate                               # (N,R,2,RAW_FEATS)
-        lab = goal[:, OTHERS[:, :2]]                         # (N,R,2) teammate goals
+        stick, goal = np.zeros((n_envs, R, 3)), np.zeros((n_envs, R), int)
+        if net is not None and by_net.any():
+            t = {q: torch.from_numpy(np.ascontiguousarray(o[q])).reshape(n_envs * R, *o[q].shape[2:]) for q in keys}
+            t["glob"] = torch.from_numpy(o["glob"])[:, ALLIANCE].reshape(n_envs * R, -1)
+            with torch.no_grad():
+                lg, mu, _ = net(t)
+                goal = torch.distributions.Categorical(logits=lg).sample().numpy().reshape(n_envs, R)
+                stick = np.clip((mu + net.stick_log_std().exp() * torch.randn_like(mu)).numpy().reshape(n_envs, R, 3), -1, 1)
+        tf = w.enc.last_teammate.copy()                     # (N,R,2,RAW_FEATS) as seen before this step
+        res = w.step(stick, goal)
+        lab = res["act_goal"][:, OTHERS[:, :2]]             # (N,R,2) the goal each teammate executed
         Xs.append(tf.reshape(-1, RAW_FEATS)); Ys.append(lab.reshape(-1))
-        info = sim.step(stick, goal)
-        if info.done.any():
-            sim.reset(info.done)
+        o = res["obs"]
+        if res["done"].any():
+            draw(res["done"])
     X = np.concatenate(Xs).astype(np.float32)
     Y = np.concatenate(Ys).astype(np.int64)
     S = np.isin(Y, scoring_ids).astype(np.int8)
@@ -144,6 +168,9 @@ def main(argv=None) -> int:
     c.add_argument("--steps", type=int, default=1500)
     c.add_argument("--seed", type=int, default=0)
     c.add_argument("--out", required=True)
+    c.add_argument("--net", default=None, help="a trained net that drives a share of the robots")
+    c.add_argument("--p_net", type=float, default=0.4)
+    c.add_argument("--no-styles", action="store_true")
     t = sub.add_parser("train")
     t.add_argument("data")
     t.add_argument("--val")
@@ -151,7 +178,8 @@ def main(argv=None) -> int:
     t.add_argument("--out", default=str(WEIGHTS))
     a = ap.parse_args(argv)
     if a.cmd == "collect":
-        X, Y, S, goals = collect(n_envs=a.envs, steps=a.steps, seed=a.seed)
+        X, Y, S, goals = collect(n_envs=a.envs, steps=a.steps, seed=a.seed, styles=not a.no_styles, net_path=a.net,
+                                 p_net=a.p_net)
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         np.savez(a.out, X=X, Y=Y, S=S, goals=np.array(goals))
         print(f"{a.out}: {len(X)} teammate samples, scoring-goal share {S.mean():.2f}")

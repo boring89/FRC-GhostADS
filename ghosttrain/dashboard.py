@@ -1,6 +1,7 @@
 """Training dashboard (local web page).
 
     uv run python -m ghosttrain.dashboard runs/teacher3 [--port 8777] [--no-live] [--opponent baseline|self]
+    uv run python -m ghosttrain.dashboard runs --follow [--lite]     # always the run that trains now; low GPU cost
 
   http://localhost:8777/          training curves from <run>/log.jsonl
   http://localhost:8777/live      broadcast: field view + two robot POVs, red/blue scoreboard, 10 s result card
@@ -8,12 +9,17 @@
 
 The broadcast renders only while a page is open (no viewer = no rendering, no match clock). Training is not affected
 except for the CPU/GPU share used while someone watches.
+Keeps streaming through changes: with --follow a new training run takes over the curves and the live view by itself;
+the live simulation reloads changed code / robot data after the current match (the stream does not stop; only
+changes to the renderer side, broadcast.py / dashboard.py / the Godot scene, need a restart); a checkpoint that cannot
+be loaded leaves the previous net on.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -117,7 +123,15 @@ setInterval(up,500);up();
 </script></body></html>"""
 
 
-def make_handler(run: Path, bc: Broadcast | None):
+def make_handler(run: Path, bc: Broadcast | None, follow: bool = False):
+    from .broadcast import active_run
+    cache = {"t": -1e9, "run": run}
+
+    def current():
+        if time.time() - cache["t"] > 10.0:
+            cache["t"], cache["run"] = time.time(), active_run(run, follow)
+        return cache["run"]
+
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -131,7 +145,7 @@ def make_handler(run: Path, bc: Broadcast | None):
             self.wfile.write(body)
 
         def _rows(self, name, n):
-            p = run / name
+            p = current() / name
             if not p.exists():
                 return []
             out = []
@@ -180,7 +194,7 @@ def make_handler(run: Path, bc: Broadcast | None):
             elif path == "/api/anomalies":
                 self._send(json.dumps(self._rows("anomalies.jsonl", 12)[::-1]).encode())
             elif path == "/api/status":
-                self._send(json.dumps({"live": bc.info if bc else "live view disabled (--no-live)",
+                self._send(json.dumps({"live": (bc.info if bc else "live view disabled (--no-live)") + f" | run {current().name}",
                                        "viewers": bc.viewers if bc else {}, "wins": bc.wins if bc else []}).encode())
             elif path == "/api/live":
                 self._send(json.dumps(bc.live if bc else {"card": None}).encode())
@@ -205,13 +219,18 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=8777)
     ap.add_argument("--no-live", action="store_true")
     ap.add_argument("--opponent", default="self", choices=["baseline", "self"], help="live red side: self = same net (default), baseline = rule-based")
+    ap.add_argument("--follow", action="store_true", help="RUN is a directory of runs: show the one that trains now")
+    ap.add_argument("--lite", action="store_true", help="low GPU cost live view: 1280x720, field.glb, no MSAA, 20/10 fps")
+    ap.add_argument("--team", default="ours", choices=["ours", "all"],
+                    help="ours: the net drives our robot in each alliance, styled baselines the partners (independent "
+                         "training, default); all: the net drives the whole blue alliance (teacher5-8)")
     a = ap.parse_args(argv)
     run = Path(a.run)
-    bc = None if a.no_live else Broadcast(run, a.opponent)
+    bc = None if a.no_live else Broadcast(run, a.opponent, team=a.team, follow=a.follow, lite=a.lite, http_port=a.port)
     if bc:
         bc.start()
     try:
-        srv = ThreadingHTTPServer((a.host, a.port), make_handler(run, bc))
+        srv = ThreadingHTTPServer((a.host, a.port), make_handler(run, bc, a.follow))
     except OSError as e:
         print(f"cannot listen on {a.host}:{a.port} ({e}); try --port <other>", file=sys.stderr)
         return 1

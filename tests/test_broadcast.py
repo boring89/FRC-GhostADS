@@ -90,3 +90,71 @@ def test_live_view_slows_down_while_the_run_trains(tmp_path):
     bc._fps_t = 0.0
     assert bc.fps() == FPS
     assert 'src="/stream.mjpg"' not in PAGE and "setPlay" in PAGE
+
+
+def test_follow_picks_the_run_that_trains_now(tmp_path):
+    import os
+    import time
+    from ghosttrain.broadcast import active_run
+    for name, age in (("teacher8", 600), ("teacher9", 5), ("bc9", 0)):
+        d = tmp_path / name
+        d.mkdir()
+        if name != "bc9":                                                    # no log: not a training run
+            (d / "log.jsonl").write_text("{}\n")
+            t = time.time() - age
+            os.utime(d / "log.jsonl", (t, t))
+    assert active_run(tmp_path, True).name == "teacher9"
+    assert active_run(tmp_path / "teacher8", False).name == "teacher8"
+
+
+def test_code_change_reloads_the_simulation_between_matches(tmp_path, monkeypatch):
+    """Changed code or robot data on disk: the simulation child is restarted (the stream keeps going)."""
+    import ghosttrain.broadcast as b
+    from ghosttrain.broadcast import Broadcast
+    for d in b.CODE_DIRS:
+        (tmp_path / d).mkdir()
+    (tmp_path / "robots" / "others.json").write_text("{}")
+    sig = b.code_signature(tmp_path)
+    import os
+    import time
+    t = time.time() + 5
+    os.utime(tmp_path / "robots" / "others.json", (t, t))
+    assert b.code_signature(tmp_path) > sig
+    bc = Broadcast(tmp_path)
+    calls = []
+
+    class Child:
+        def terminate(self):
+            calls.append("terminate")
+
+        def join(self, timeout=None):
+            pass
+    bc._child, bc._sig = Child(), 1.0
+    monkeypatch.setattr(bc, "_spawn_child", lambda delay=0.0: calls.append(("spawn", delay)))
+    monkeypatch.setattr(b, "code_signature", lambda root=None: 1.0)
+    assert not bc._maybe_reload() and not calls
+    monkeypatch.setattr(b, "code_signature", lambda root=None: 2.0)
+    assert bc._maybe_reload(delay=10.0) and calls == ["terminate", ("spawn", 10.0)] and "reloaded" in bc.info
+
+
+def test_lite_layout_fits_the_overlay():
+    from ghosttrain.broadcast import LITE, Broadcast
+    bc = Broadcast("/tmp/none", lite=True)
+    (cw, ch), (tw, th), (pw, ph) = bc.canvas_size, bc.top_size, bc.tile_size
+    assert tw == cw and th + ph == ch and 2 * pw == cw and cw / ch == 16 / 9 and LITE["msaa"] == 0
+
+
+def test_each_dashboard_gets_its_own_free_renderer_ports():
+    import socket
+    from ghosttrain.broadcast import Broadcast, free_ports
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    p = busy.getsockname()[1]
+    try:
+        got = free_ports(p, 3)
+        assert p not in got and len(set(got)) == 3 and min(got) > p          # a port in use is skipped
+    finally:
+        busy.close()
+    a, b = Broadcast("/tmp/none", http_port=8777), Broadcast("/tmp/none", http_port=8788)
+    assert not set(a.ports) & set(b.ports)

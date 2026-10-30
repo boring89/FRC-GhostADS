@@ -169,17 +169,20 @@ def test_stick_std_has_a_soft_floor():
 
 
 def test_trainer_sides_learner_mask_and_per_head_update(tmp_path):
-    """The learner may play either alliance: the mask, the baseline control and the pool side follow it; one PPO
-    iteration reports finite per-head statistics."""
-    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, epochs=1, minibatch=128, device="cpu", out=str(tmp_path))
+    """team "all": the learner may play either alliance: the mask, the baseline control and the pool side follow
+    it; one PPO iteration reports finite per-head statistics."""
+    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, epochs=1, minibatch=128, device="cpu", out=str(tmp_path),
+                   team="all")
     tr = Trainer(cfg, TeacherVecEnv(SimCfg(n_envs=4, sensors=False, seed=0), 1, in_process=True))
     try:
-        tr.opp[:] = [0, -1, 0, 0]
-        tr.side[:] = [0, 1, 1, 0]
-        m = tr._learner_mask().reshape(4, R)
         blue = ALLIANCE == 0
+        for e, (opp, side) in enumerate(((0, 0), (-1, 1), (0, 1), (0, 0))):
+            tr.opp[e], tr.side[e] = opp, side
+            tr.drv[e] = tr._drivers(side, opp)
+        m = tr._learner_mask().reshape(4, R)
         assert (m[0] == blue).all() and m[1].all() and (m[2] == ~blue).all() and (m[3] == blue).all()
-        assert tr._ctrl().tolist() == [[False, True], [False, False], [True, False], [False, True]]
+        c = tr._ctrl()
+        assert (c[0] == ~blue).all() and not c[1].any() and (c[2] == blue).all() and (c[3] == ~blue).all()
         tr._assign(np.ones(4, bool))
         assert set(np.unique(tr.side)) <= {0, 1}
         row = tr.train(1)
@@ -340,3 +343,85 @@ def test_explained_variance_uses_every_sample(tmp_path):
         assert v.shape == ref.shape and torch.allclose(v, ref, atol=1e-5)
     finally:
         tr.close()
+
+
+def test_independent_team_learner_drives_only_our_robot(tmp_path):
+    """team "ours": the learner drives our robot of its alliance (slot 0 blue, 3 red) and, in self-play, the other
+    alliance's one; partners are the styled baseline or pool snapshots; a baseline / pool opponent plays its whole
+    alliance."""
+    from ghosttrain.arena import SYMMETRIC
+    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, epochs=1, minibatch=128, device="cpu", out=str(tmp_path),
+                   p_partner_baseline=1.0)
+    tr = Trainer(cfg, TeacherVecEnv(SimCfg(n_envs=4, sensors=False, seed=0, slots=SYMMETRIC), 1, in_process=True))
+    try:
+        assert tr._drivers(0, 0).tolist() == [-1, 0, 0, 0, 0, 0]
+        assert tr._drivers(1, -1).tolist() == [-1, 0, 0, -1, 0, 0]
+        tr.league.add(tr.net.state_dict(), win=0.5)
+        k = max(tr.league.snaps)
+        assert tr._drivers(1, k).tolist() == [k, k, k, -1, 0, 0]
+        tr.cfg.p_partner_baseline = 0.0
+        d = tr._drivers(0, 0)
+        assert d[0] == -1 and (d[1:3] == k).all() and (d[3:] == 0).all()        # snapshot partners
+        tr._assign(np.ones(4, bool))
+        assert ((tr.drv == -1).sum(1) >= 1).all() and tr.env.local[0].styles   # baseline robots get styles
+        assert (tr.env.local[0].ctrl_r == (tr.drv == 0)).all()
+        row = tr.train(1)
+        assert np.isfinite(row["pg_stick"]) and np.isfinite(row["kl"])
+    finally:
+        tr.close()
+
+
+def test_baseline_styles_vary_per_robot_and_reset_to_defaults():
+    from ghosttrain.baseline import Baseline
+    sim = quiet_sim(n=3, seed=3)
+    bl = Baseline(sim.game)
+    rng = np.random.default_rng(0)
+    bl.restyle(3, np.array([True, False, True]), rng)
+    assert bl.kp.shape == (3, R) and (bl.kp[1] == bl.defaults["kp"]).all() and bl.kp[0].std() > 0
+    lo, hi = Baseline.STYLE_RANGES["algae_reef_bias"]
+    assert ((bl.algae_reef_bias[[0, 2]] >= lo) & (bl.algae_reef_bias[[0, 2]] <= hi)).all()
+    st, gl = bl.act(sim)                                                      # array parameters run
+    assert np.isfinite(st).all()
+    bl.restyle(3, np.ones(3, bool), rng, on=False)
+    assert (bl.kp == bl.defaults["kp"]).all() and bl.prefer_net.all()
+
+
+def test_reef_report_is_late_sparse_and_sometimes_wrong():
+    from ghosttrain.obs import ReefReport
+    sim = quiet_sim(n=2, seed=4)
+    rep = ReefReport(2, sim.game.l1_cap, np.random.default_rng(0), err_p=0.0)
+    rep.step(sim)
+    assert not rep.view["branch"].any()
+    sim.gs.branch[:, 0, 2, 0, 2] = True                                        # an L4 coral appears now
+    seen = []
+    for t in range(25):
+        rep.step(sim)
+        seen.append(bool(rep.view["branch"][0, 0, 2, 0, 2]))
+    first = seen.index(True)
+    assert 4 <= first <= 20 and all(seen[first:])                              # 0.5-1 s late, at a 1 s update
+    noisy = ReefReport(2, sim.game.l1_cap, np.random.default_rng(1), err_p=0.5)
+    for _ in range(12):
+        noisy.step(sim)
+    assert (noisy.view["branch"] != sim.gs.branch).any()                       # errors show up
+    rep.reset(np.array([True, False]))
+    sim.gs.branch[:] = False
+    rep.step(sim)
+    assert not rep.view["branch"][0].any() and rep.view["branch"][1, 0, 2, 0, 2]   # a reset env restarts from the truth
+
+
+def test_worker_actor_sees_the_reported_reef_and_the_critic_the_truth():
+    w = _Worker(SimCfg(n_envs=1, sensors=False, seed=0, randomize=False, slots=("ours",) * 6))
+    w.reset()
+    w.sim.gs.branch[0, 0, 1, 1, 1] = True
+    o = w._obs()
+    enc_true = w.enc.encode(w.sim, w.goal)
+    assert not np.array_equal(o["faces"], enc_true["faces"])                  # actor: not reported yet
+    assert np.array_equal(o["glob"], enc_true["glob"])                         # critic: true state
+
+
+def test_intent_collection_with_a_net_driving_some_robots(tmp_path):
+    from ghosttrain.intent import RAW_FEATS, collect
+    net = TeacherNet(14, 333)
+    torch.save({"net": net.state_dict()}, tmp_path / "n.pt")
+    X, Y, S, goals = collect(n_envs=2, steps=5, seed=0, net_path=str(tmp_path / "n.pt"), p_net=0.5)
+    assert X.shape == (2 * 6 * 2 * 5, RAW_FEATS) and len(Y) == len(X) and Y.max() < len(goals)

@@ -11,6 +11,10 @@ The field is 180-degree rotationally symmetric, so every viewer sees the world a
   landmarks (N,R,15,Fl)    4 stations, 2 processors, 2 net zones, 6 cages, barge support
   glob      (N,2,G)        centralised critic input, absolute canonical frame, one per alliance
   gmask     (N,R,13)       which goals this robot can do (capabilities)
+
+The reef state in `faces` can come from a ReefReport (the training and evaluation workers use one): a person next to
+the field relays it, so the actor sees it about once a second, 0.5-1 s late, with a few cells wrong. The critic
+(`glob`) keeps the true state.
 """
 from __future__ import annotations
 
@@ -31,6 +35,62 @@ OTHERS = np.array([[q for q in range(R) if q != r and ALLIANCE[q] == ALLIANCE[r]
 def _ego(v, c, s):
     """world->ego rotation of vectors v (...,2) with cos/sin of the viewer yaw."""
     return np.stack([v[..., 0] * c + v[..., 1] * s, -v[..., 0] * s + v[..., 1] * c], -1)
+
+
+class ReefReport:
+    """Reef state as relayed by an observer: updated every `period_s` (random phase per env) with the state of
+    `delay_s` ago (drawn per env and episode), each branch cell, trough count and algae flag wrong with probability
+    `err_p` per update (a wrong trough count is off by one). Call step(sim) once per policy tick (before encoding)
+    and reset(mask) when envs reset."""
+
+    def __init__(self, n, l1_cap, rng, tick_s=0.1, period_s=1.0, delay_s=(0.5, 1.0), err_p=0.02):
+        self.n, self.l1_cap, self.rng = n, l1_cap, rng
+        self.period = max(1, int(round(period_s / tick_s)))
+        self.dmin, self.dmax = (int(round(d / tick_s)) for d in delay_s)
+        self.err_p = err_p
+        self.hist = None                                   # ring of true states, length dmax + 1
+        self.t = np.zeros(n, int)
+        self.delay = np.zeros(n, int)
+        self.phase = np.zeros(n, int)
+        self.view = None
+        self._fresh = np.ones(n, bool)
+
+    def reset(self, mask=None):
+        m = np.ones(self.n, bool) if mask is None else np.asarray(mask, bool)
+        self._fresh |= m
+
+    def _state(self, gs):
+        return {"branch": gs.branch.copy(), "l1": gs.l1.copy(), "reef_algae": gs.reef_algae.copy()}
+
+    def step(self, sim):
+        st = self._state(sim.gs)
+        if self.hist is None:
+            self.hist = [st] * (self.dmax + 1)
+            self.view = {k: v.copy() for k, v in st.items()}
+        self.hist = self.hist[1:] + [st]
+        f = self._fresh
+        if f.any():                                        # a new match: the observer starts from the true state
+            k = int(f.sum())
+            self.t[f] = 0
+            self.delay[f] = self.rng.integers(self.dmin, self.dmax + 1, k)
+            self.phase[f] = self.rng.integers(0, self.period, k)
+            for key in st:
+                self.view[key][f] = st[key][f]
+                for h in self.hist:
+                    h[key][f] = st[key][f]
+            self._fresh = np.zeros(self.n, bool)
+        upd = (self.t + self.phase) % self.period == 0
+        self.t += 1
+        if not upd.any():
+            return
+        for e in np.flatnonzero(upd):
+            old = self.hist[-1 - self.delay[e]]
+            br, l1, alg = old["branch"][e].copy(), old["l1"][e].copy(), old["reef_algae"][e].copy()
+            br ^= self.rng.random(br.shape) < self.err_p
+            alg ^= self.rng.random(alg.shape) < self.err_p
+            wrong = self.rng.random(l1.shape) < self.err_p
+            l1 = np.where(wrong, np.clip(l1 + self.rng.choice([-1, 1], l1.shape), 0, self.l1_cap), l1)
+            self.view["branch"][e], self.view["l1"][e], self.view["reef_algae"][e] = br, l1, alg
 
 
 class Encoder:
@@ -101,9 +161,12 @@ class Encoder:
                                prm.net[..., None], (prm.climb / 2.0)[..., None]], -1).astype(np.float32)
 
     # ------------------------------------------------------------------ main
-    def encode(self, sim, goal_applied):
-        """goal_applied (N,R) int: goal currently executed by each robot."""
+    def encode(self, sim, goal_applied, reef=None):
+        """goal_applied (N,R) int: goal currently executed by each robot. reef: ReefReport (actor view of the reef)
+        or None (true state)."""
         g, gs, b, prm = self.g, sim.gs, sim.body, sim.prm
+        rv = reef.view if reef is not None and reef.view is not None else \
+            {"branch": gs.branch, "l1": gs.l1, "reef_algae": gs.reef_algae}
         n = b.pose.shape[0]
         env = np.arange(n)
         al = ALLIANCE
@@ -184,9 +247,9 @@ class Encoder:
         fn_v = np.where(flip[..., None], -fn_all[None], fn_all[None])
         rel = _ego(fc_v - pos[:, :, None], c[..., None], s[..., None])
         nrm = _ego(np.broadcast_to(fn_v, rel.shape), c[..., None], s[..., None])
-        br = np.concatenate([gs.branch[:, al], gs.branch[:, 1 - al]], 2).reshape(n, R, 12, 6)
-        l1 = np.concatenate([gs.l1[:, al], gs.l1[:, 1 - al]], 2) / max(g.l1_cap, 1)
-        alg = np.concatenate([gs.reef_algae[:, al], gs.reef_algae[:, 1 - al]], 2)
+        br = np.concatenate([rv["branch"][:, al], rv["branch"][:, 1 - al]], 2).reshape(n, R, 12, 6)
+        l1 = np.concatenate([rv["l1"][:, al], rv["l1"][:, 1 - al]], 2) / max(g.l1_cap, 1)
+        alg = np.concatenate([rv["reef_algae"][:, al], rv["reef_algae"][:, 1 - al]], 2)
         hi = np.concatenate([g.algae_high, g.algae_high])
         owner = np.concatenate([np.ones(6), np.zeros(6)])
         faces = np.concatenate([rel / 10.0, nrm, (np.linalg.norm(rel, axis=-1) / 20.0)[..., None], np.broadcast_to(owner[:, None], (n, R, 12, 1)),

@@ -7,8 +7,10 @@ Every env plays whole matches from the start (the training envs cut their first 
 A is blue in even envs and red in odd envs. Slots are symmetric by default: our robot in both alliances (slots 0 and
 3), so the result measures the policies and not which side drew our robot (with the training slots the team with our
 robot won ~0.8 of the teacher8 head-to-heads). Policies act deterministically by default (argmax goal, mean stick),
-which is less noisy than sampling. Reports A's win rate (Wilson 95 % CI) and the mean score difference A - B with a
-95 % CI, overall and per side.
+which is less noisy than sampling. team "ours" (default): each policy drives only its alliance's copy of our robot and
+the baseline drives the partners (as nets trained with team "ours" play); team "all": each policy drives its whole
+alliance (teacher5-8 nets). Reports A's win rate (Wilson 95 % CI) and the mean score difference A - B with a 95 % CI,
+overall and per side.
 """
 from __future__ import annotations
 
@@ -113,9 +115,23 @@ def summarise(res):
     return out
 
 
+def masks(N, team="ours", b_is_net=True):
+    """(N,R) robots driven by A and by B: A on blue in even envs, on red in odd envs. team "ours": our robot only
+    (slot 0 / 3), else the whole alliance. B = baseline: nothing (the workers' baseline drives the rest)."""
+    a_red = np.arange(N) % 2 == 1
+    a_team = (ALLIANCE[None] == 1) == a_red[:, None]
+    if team == "ours":
+        ours = np.zeros((N, R), bool)
+        ours[:, [0, 3]] = True
+        a_np, b_np = a_team & ours, ~a_team & ours
+    else:
+        a_np, b_np = a_team, ~a_team
+    return a_np, (b_np if b_is_net else np.zeros_like(b_np))
+
+
 @torch.no_grad()
 def play(a, b, episodes=192, deterministic=True, symmetric=True, n_procs=12, envs_per_proc=8, seed=123,
-         device="cuda", in_process=False):
+         device="cuda", in_process=False, team="ours"):
     """A vs B (paths, 'baseline', or loaded nets for B). Returns summarise() of whole matches."""
     dev = torch.device(device if torch.cuda.is_available() else "cpu")
     A = load_policy(a, dev) if isinstance(a, str) else a
@@ -125,11 +141,9 @@ def play(a, b, episodes=192, deterministic=True, symmetric=True, n_procs=12, env
     env = ArenaEnv(cfg, n_procs, in_process=in_process)
     N = env.n_envs
     a_red = np.arange(N) % 2 == 1
-    ctrl = np.zeros((N, 2), bool)
-    if B is None:
-        ctrl[np.arange(N), np.where(a_red, 0, 1)] = True     # the baseline drives B's alliance
-    env.set_ctrl(ctrl)
-    a_mask = torch.from_numpy(((ALLIANCE[None] == 1) == a_red[:, None]).reshape(-1)).to(dev)
+    a_np, b_np = masks(N, team, B is not None)
+    env.set_ctrl(~(a_np | b_np))                                                      # the baseline drives the rest
+    a_mask, b_mask = torch.from_numpy(a_np.reshape(-1)).to(dev), torch.from_numpy(b_np.reshape(-1)).to(dev)
     obs = env.reset()
     res = []
     try:
@@ -141,8 +155,8 @@ def play(a, b, episodes=192, deterministic=True, symmetric=True, n_procs=12, env
                 t["glob"] = torch.from_numpy(obs["glob"]).to(dev)[:, ALLIANCE].reshape(N * R, -1)
                 goal = torch.zeros(N * R, dtype=torch.long, device=dev)
                 stick = torch.zeros(N * R, 3, device=dev)
-                for net, m in ((A, a_mask), (B, ~a_mask)):
-                    if net is None:
+                for net, m in ((A, a_mask), (B, b_mask)):
+                    if net is None or not bool(m.any()):
                         continue
                     lg, mu, _ = net({k: v[m] for k, v in t.items()})
                     goal[m] = lg.argmax(-1) if deterministic else torch.distributions.Categorical(logits=lg).sample()
@@ -173,10 +187,11 @@ def main(argv=None) -> int:
     ap.add_argument("--episodes", type=int, default=192)
     ap.add_argument("--stoch", action="store_true", help="sample goals and sticks as in training")
     ap.add_argument("--asym", action="store_true", help="training slots (our robot only in slot 0, blue)")
+    ap.add_argument("--team", default="ours", choices=["ours", "all"], help="what each policy drives (see the top)")
     ap.add_argument("--n_procs", type=int, default=12)
     ap.add_argument("--json", action="store_true")
     x = ap.parse_args(argv)
-    r = play(x.a, x.b, x.episodes, deterministic=not x.stoch, symmetric=not x.asym, n_procs=x.n_procs)
+    r = play(x.a, x.b, x.episodes, deterministic=not x.stoch, symmetric=not x.asym, n_procs=x.n_procs, team=x.team)
     print(json.dumps(r) if x.json else describe(r, x.a, x.b), flush=True)
     return 0
 

@@ -29,6 +29,8 @@ from .broadcast_sim import RESULT_S, TICK_S
 CANVAS = (1920, 1080)
 TOP = (1920, 720)
 TILE = (960, 360)
+LITE = {"canvas": (1280, 720), "top": (1280, 480), "tile": (640, 240), "fps": 20, "fps_training": 10, "msaa": 0,
+        "visual": "auto", "jpeg": 80}          # --lite: low GPU cost (field.glb, no MSAA, 720p, fewer frames)
 FPS = 30
 FPS_TRAINING = 15         # while the run is training (log.jsonl written in the last TRAINING_IDLE_S): the live view
 TRAINING_IDLE_S = 120.0   # shares the GPU with the learner (at 30 fps the training ran at ~45 % of its speed)
@@ -57,13 +59,58 @@ def look_rig(eye, target, hfov_deg, size=TILE):
             "capture": list(size), "fx": fx, "fy": fx, "cx": size[0] / 2, "cy": size[1] / 2}
 
 
+ROOT = Path(__file__).resolve().parents[1]
+CODE_DIRS = ("ghostsim", "ghosttrain", "game", "robots")
+
+
+def code_signature(root=ROOT):
+    """Newest modification time of the simulation / policy code and data. The live simulation runs in a child
+    process: when this changes, the child is restarted after the current match (new code, no dashboard restart)."""
+    m = 0.0
+    for d in CODE_DIRS:
+        for p in (root / d).rglob("*"):
+            if p.suffix in (".py", ".json") and "__pycache__" not in p.parts:
+                m = max(m, p.stat().st_mtime)
+    return m
+
+
+def free_ports(base: int, n: int = 3):
+    """n local TCP ports from `base` up that nobody listens on (renderer ports of this dashboard: a second dashboard
+    must not talk to the first one's Godot instances)."""
+    import socket
+    out, p = [], base
+    while len(out) < n:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                out.append(p)
+            except OSError:
+                pass
+        p += 1
+    return tuple(out)
+
+
+def active_run(root: Path, follow: bool) -> Path:
+    """The run to show: `root` itself, or with follow the run directory under `root` whose log.jsonl was written
+    last (a new training run takes over the live view by itself)."""
+    root = Path(root)
+    if not follow:
+        return root
+    best, t = root, -1.0
+    for d in root.iterdir() if root.is_dir() else []:
+        p = d / "log.jsonl"
+        if d.is_dir() and p.exists() and p.stat().st_mtime > t:
+            best, t = d, p.stat().st_mtime
+    return best
+
+
 class FollowCam:
     """Broadcast camera on a tripod outside the field (scoring-table side, raised) that pans and zooms to keep one
     robot framed: the aim point follows the robot with a lag, the field of view shows ~`span` metres around it."""
 
-    def __init__(self, eye, span=3.6, tau=0.35, hfov=(12.0, 55.0)):
+    def __init__(self, eye, span=3.6, tau=0.35, hfov=(12.0, 55.0), size=TILE):
         self.eye, self.span, self.tau, self.hfov = np.asarray(eye, float), span, tau, hfov
-        self.aim, self.robot = None, None
+        self.aim, self.robot, self.size = None, None, size
 
     def rig(self, robot, xy, dt):
         tgt = np.array([xy[0], xy[1], 0.55])
@@ -73,7 +120,7 @@ class FollowCam:
             self.aim = self.aim + (tgt - self.aim) * (1.0 - np.exp(-dt / self.tau))
         dist = np.linalg.norm(self.aim - self.eye)
         h = float(np.clip(np.degrees(2 * np.arctan(self.span / 2 / dist)), *self.hfov))
-        return look_rig(self.eye, self.aim, h)
+        return look_rig(self.eye, self.aim, h, self.size)
 
 
 def follow_cams(game):
@@ -167,10 +214,15 @@ class Broadcast:
     Rendering runs at 30 fps only while a page is open; the simulation process pauses while nobody watches.
     """
 
-    def __init__(self, run: Path, opponent="self", seed=0, render_top=TOP, render_pov=(640, 480)):
-        self.run = Path(run)
-        self.opponent, self.seed = opponent, seed
-        self.top_size, self.pov_size = render_top, render_pov
+    def __init__(self, run: Path, opponent="self", seed=0, render_top=TOP, render_pov=(640, 480), team="ours",
+                 follow=False, lite=False, http_port=8777):
+        self.root, self.follow = Path(run), follow
+        self.opponent, self.seed, self.team = opponent, seed, team
+        self.lite = lite
+        self.canvas_size = LITE["canvas"] if lite else CANVAS
+        self.top_size = LITE["top"] if lite else render_top
+        self.tile_size = LITE["tile"] if lite else TILE
+        self.pov_size = render_pov
         self.viewers = {"bc": 0, "robot": 0}
         self.robot_sel = 0
         self.cond = threading.Condition()
@@ -184,25 +236,53 @@ class Broadcast:
         self.live = {"card": None, "match": 0, "wins": [0, 0], "step": 0}     # /api/live (HTML overlay)
         self.stop = False
         self.timing = {}                              # seconds per stage (diagnostics)
-        self.ports = (48631, 48632, 48633)
+        self.ports = free_ports(48631 + 3 * (http_port - 8777))       # per dashboard (port 8777: 48631-48633)
         self.infer_device = "cpu"
         self.match_s = 150.0                          # auto 15 s + teleop 135 s (game.json)
         self.rng = np.random.default_rng(seed)
         self.thread = threading.Thread(target=self._loop, daemon=True)
 
+    @property
+    def run(self) -> Path:
+        """The run shown (re-resolved every 10 s with follow)."""
+        now = time.time()
+        if now - getattr(self, "_run_t", -1e9) > 10.0:
+            self._run_t, self._run_v = now, active_run(self.root, self.follow)
+        return self._run_v
+
     # ------------------------------------------------------------------ public
     def start(self):
         import multiprocessing as mp
-        from .broadcast_sim import run_matches
         ctx = mp.get_context("spawn")                 # no fork: the parent holds Godot sockets and threads
-        self._conn, child_conn = ctx.Pipe(duplex=False)
+        self._ctx = ctx
         self._watching, self._stop_evt = ctx.Event(), ctx.Event()
         self._sel = ctx.Value("i", 0)
-        self._child = ctx.Process(target=run_matches, daemon=True,
-                                  args=(str(self.run), self.opponent, self.seed, child_conn, self._watching, self._sel,
-                                        self._stop_evt))
-        self._child.start()
+        self._spawn_child()
         self.thread.start()
+
+    def _spawn_child(self, delay=0.0):
+        """(Re)start the simulation process; a fresh interpreter imports the code as it is on disk now. delay: wait
+        before its first match (the result card of the last one is still on screen)."""
+        from .broadcast_sim import run_matches
+        self._sig = code_signature()
+        self._sig_t = time.time()
+        self._conn, child_conn = self._ctx.Pipe(duplex=False)
+        self._child = self._ctx.Process(target=run_matches, daemon=True,
+                                        args=(str(self.root), self.opponent, self.seed + self.matches, child_conn,
+                                              self._watching, self._sel, self._stop_evt, self.team, self.follow, delay))
+        self._child.start()
+
+    def _maybe_reload(self, delay=0.0):
+        """Between matches (or while nobody watches): restart the simulation process if its code or data changed on
+        disk. The HTTP server, the renderers and the stream keep running."""
+        self._sig_t = time.time()
+        if code_signature() == self._sig:
+            return False
+        self._child.terminate()
+        self._child.join(timeout=5)
+        self._spawn_child(delay)
+        self.info = "code changed on disk: simulation reloaded"
+        return True
 
     def shutdown(self):
         """Stop the simulation process and the renderer; the renderer closes its Godot clients on the way out."""
@@ -243,7 +323,8 @@ class Broadcast:
         if now - getattr(self, "_fps_t", 0.0) >= 5.0:
             p = self.run / "log.jsonl"
             busy = p.exists() and now - p.stat().st_mtime < TRAINING_IDLE_S
-            self._fps_t, self._fps_v = now, FPS_TRAINING if busy else FPS
+            hi, lo = (LITE["fps"], LITE["fps_training"]) if self.lite else (FPS, FPS_TRAINING)
+            self._fps_t, self._fps_v = now, lo if busy else hi
         return self._fps_v
 
     def training_step(self):
@@ -299,17 +380,21 @@ class Broadcast:
         self._game = game
         tags, tag_ids = tag_corners(game)
         rc_top = RenderClient(port=self.ports[0])     # separate Godot instances: same pid would share a port
-        rc_top.configure(game, [top_rig(game, *self.top_size)], n_envs=1, width=self.top_size[0],
-                         height=self.top_size[1], max_cams=1, msaa=1, fxaa=True, visual="hi", robot="auto")
+        msaa, visual = (LITE["msaa"], LITE["visual"]) if self.lite else (1, "hi")
+        TOP_, TILE_ = self.top_size, self.tile_size
+        rc_top.configure(game, [top_rig(game, *TOP_)], n_envs=1, width=TOP_[0], height=TOP_[1], max_cams=1,
+                         msaa=msaa, fxaa=True, visual=visual, robot="auto")
         rc_pov = RenderClient(port=self.ports[1])                 # the two follow cameras
         follow = follow_cams(game)
-        rc_pov.configure(game, [look_rig(f.eye, [game.mid[0], game.mid[1], 0.5], 40.0) for f in follow], n_envs=1,
-                         width=TILE[0], height=TILE[1], max_cams=2, msaa=1, fxaa=True, visual="hi", robot="auto")
+        for f in follow:
+            f.size = TILE_
+        rc_pov.configure(game, [look_rig(f.eye, [game.mid[0], game.mid[1], 0.5], 40.0, TILE_) for f in follow], n_envs=1,
+                         width=TILE_[0], height=TILE_[1], max_cams=2, msaa=msaa, fxaa=True, visual=visual, robot="auto")
         cad_robot = rc_top.robot == "cad" and rc_pov.robot == "cad"     # robot.glb bodies, else the box model
         t_prev = time.time()
         rc_robot = None                               # 640x480 client, started only when the robot page is open
         full_cam = robot_rig(self.pov_size)
-        canvas = np.zeros((CANVAS[1], CANVAS[0], 3), np.uint8)
+        canvas = np.zeros((self.canvas_size[1], self.canvas_size[0], 3), np.uint8)
         from concurrent.futures import ThreadPoolExecutor
         pool = ThreadPoolExecutor(2)
         clients = [rc_top, rc_pov]
@@ -339,13 +424,19 @@ class Broadcast:
                     elif msg["kind"] == "tick":
                         prev, latest, t_recv = latest, msg["snap"], time.time()
                         self.status = {r: d for r, d in enumerate(latest["status"])}
+                    elif msg["kind"] == "info":
+                        self.info = msg["msg"]
                     elif msg["kind"] == "over":
                         scores, cats = msg["score"], msg["cats"]
                         if scores[0] != scores[1]:
                             self.wins[0 if scores[0] > scores[1] else 1] += 1
                         card = (scores, cats, time.time() + RESULT_S)
                         self.info = f"last match {scores[0]:.0f}-{scores[1]:.0f}"
+                        if self._maybe_reload(delay=RESULT_S):         # new code: next match runs on it
+                            break
                 if sum(self.viewers.values()) == 0:
+                    if time.time() - self._sig_t > 30.0:
+                        self._maybe_reload()
                     time.sleep(0.2)
                     continue
                 if card is not None:
@@ -378,10 +469,10 @@ class Broadcast:
                 f_pov = pool.submit(rc_pov.render, state, [(0, pick["blue"], 0), (0, pick["red"], 1)], rigs=rigs)
                 img_top, _ = f_top.result()
                 img_pov, _ = f_pov.result()
-                canvas[:TOP[1]] = cv2.cvtColor(img_top[0], cv2.COLOR_RGB2BGR)
-                canvas[TOP[1]:, :TILE[0]] = cv2.cvtColor(img_pov[0], cv2.COLOR_RGB2BGR)
-                canvas[TOP[1]:, TILE[0]:] = cv2.cvtColor(img_pov[1], cv2.COLOR_RGB2BGR)
-                self._publish("bc", canvas, quality=88)
+                canvas[:TOP_[1]] = cv2.cvtColor(img_top[0], cv2.COLOR_RGB2BGR)
+                canvas[TOP_[1]:, :TILE_[0]] = cv2.cvtColor(img_pov[0], cv2.COLOR_RGB2BGR)
+                canvas[TOP_[1]:, TILE_[0]:] = cv2.cvtColor(img_pov[1], cv2.COLOR_RGB2BGR)
+                self._publish("bc", canvas, quality=LITE["jpeg"] if self.lite else 88)
                 self.live = live_state(latest, self.match_s, self.training_step(), self.wins, pick, self.opponent,
                                        None, self.matches)
                 frame_idx += 1
@@ -390,7 +481,7 @@ class Broadcast:
                         rc_robot = RenderClient(port=self.ports[2])
                         clients.append(rc_robot)
                         rc_robot.configure(game, [full_cam], n_envs=1, width=self.pov_size[0], height=self.pov_size[1],
-                                           max_cams=1, msaa=0, visual="hi", robot="cad" if cad_robot else "box")
+                                           max_cams=1, msaa=0, visual=visual, robot="cad" if cad_robot else "box")
                         if appearance is not None:
                             rc_robot.set_appearance(0, *appearance)
                     img_rob, _ = rc_robot.render(state, [(0, latest["sel"], 0)])

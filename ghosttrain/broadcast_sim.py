@@ -39,13 +39,13 @@ def robot_status(sim, r, goal):
 
 def mech_inputs(sim):
     """JointTracker.update arguments for env 0: the goal the rules executed, dwell progress, held pieces, hanging,
-    and whether the nearest own reef face holds its algae high."""
+    whether the nearest own reef face holds its algae high, and the dwell length (s)."""
     gs, g = sim.gs, sim.game
     from ghostsim.robots import ALLIANCE
     prog = np.where(gs.timer[0] > 0, gs.timer[0] / np.maximum(gs.need[0], 1e-6), 0.0)
     d = np.linalg.norm(g.reef_fc[ALLIANCE] - sim.body.pose[0, :, None, :2], axis=-1)        # (R,6)
     high = g.algae_high[np.argmin(d, -1)]
-    return gs.timer_goal[0], np.clip(prog, 0.0, 1.0), gs.hold_coral[0], gs.hold_algae[0], gs.climbed[0], high
+    return gs.timer_goal[0], np.clip(prog, 0.0, 1.0), gs.hold_coral[0], gs.hold_algae[0], gs.climbed[0], high, gs.need[0]
 
 
 def pov_data(sim, r):
@@ -59,7 +59,7 @@ def pov_data(sim, r):
             "cam_rot": crot[0, 0].tolist(), "K": [float(x) for x in cams.K[0]]}
 
 
-def run_matches(run, opponent, seed, conn, watching, sel, stop):
+def run_matches(run, opponent, seed, conn, watching, sel, stop, team="ours", follow=False, delay=0.0):
     """Entry point of the simulation process (must be importable for multiprocessing 'spawn')."""
     import torch
     torch.set_num_threads(2)
@@ -71,30 +71,52 @@ def run_matches(run, opponent, seed, conn, watching, sel, stop):
     from .obs import Encoder
     from .vecenv import _Worker
 
-    run = Path(run)
+    from .broadcast import active_run
+    root = Path(run)
     game = load("2025")
     enc = Encoder(game)
     dev = torch.device("cpu")          # a 6-agent forward is ~3 ms on CPU; GPU kernels queue behind the renderers
     net = TeacherNet(enc.n_goals, enc.G).to(dev)
-    ckpt, mtime = run / "latest_net.pt", 0.0
+    ckpt, mtime, loaded = None, 0.0, False
     keys = ("self", "others", "pieces", "pmask", "faces", "lm", "gmask")
     rng = np.random.default_rng(seed)
+    t_end = time.time() + delay                       # after a reload: the last result card is still shown
+    while time.time() < t_end and not stop.is_set():
+        time.sleep(0.2)
     while not stop.is_set():
         if not watching.is_set():
             time.sleep(0.2)
             continue
-        if not ckpt.exists():
-            time.sleep(2)
-            continue
-        mt = ckpt.stat().st_mtime
-        if mt != mtime:
-            sd = torch.load(ckpt, map_location=dev, weights_only=False)
-            net.load_state_dict(sd["net"] if "net" in sd else sd)
-            net.eval()
-            mtime = mt
-        w = _Worker(SimCfg(n_envs=1, sensors=True, seed=int(rng.integers(1 << 30))))
+        path = active_run(root, follow) / "latest_net.pt"          # follow: the run that trains now
+        if not path.exists():
+            if not loaded:
+                time.sleep(2)
+                continue
+        elif (path, path.stat().st_mtime) != (ckpt, mtime):
+            try:                                                   # a net from other code: keep showing the old one
+                sd = torch.load(path, map_location=dev, weights_only=False)
+                net.load_state_dict(sd["net"] if "net" in sd else sd)
+                net.eval()
+                loaded = True
+                if path != ckpt:
+                    conn.send({"kind": "info", "msg": f"showing {path.parent.name}"})
+            except Exception as e:
+                conn.send({"kind": "info", "msg": f"could not load {path}: {type(e).__name__}; keeping the previous net"})
+                if not loaded:
+                    time.sleep(5)
+                    continue
+            ckpt, mtime = path, path.stat().st_mtime
+        if team == "ours":                            # our robot in both alliances, partners are styled baselines
+            from .arena import SYMMETRIC
+            w = _Worker(SimCfg(n_envs=1, sensors=True, seed=int(rng.integers(1 << 30)), slots=SYMMETRIC))
+            ctrl = np.ones((1, R), bool)
+            ctrl[0, 0] = False                        # blue: our robot is the net
+            ctrl[0, 3] = opponent == "baseline"       # red: our robot is the net too (self) or the baseline
+            w.set_ctrl(ctrl, styles=True)
+        else:
+            w = _Worker(SimCfg(n_envs=1, sensors=True, seed=int(rng.integers(1 << 30))))
+            w.set_ctrl(np.array([[False, opponent == "baseline"]]))
         w.trunc_at[:] = 10 ** 9
-        w.set_ctrl(np.array([[False, opponent == "baseline"]]))
         o = w.reset()
         sim = w.sim
         from .broadcast import live_appearance

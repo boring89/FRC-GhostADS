@@ -24,7 +24,9 @@ from .mechanism import (CLIMB, H_MAX, SLOT_W, SLOTS, STOW, WRIST, algae_target, 
 JOINTS = ("h", "wrist", "climb")
 RATE = np.array([3.0, 300.0, 120.0])               # m/s, deg/s, deg/s
 LINGER_S = 0.35
-RISE_AT = 0.7                                      # share of the dwell at which a score pose is reached
+RISE_AT = 0.7                                      # share of the dwell at which a score pose is reached ...
+RISE_S = (0.35, 1.0)                               # ... but within these seconds: a slow robot (long dwell) raises its
+                                                   # elevator at a normal speed, then aligns / places with it up
 REEF_ALGAE_Z = {"low": 36.3 * 0.0254, "high": 52.1 * 0.0254}     # game.json field.reef.algae_rest
 # score poses: (coral centre height, coral pitch); heights a little above each branch top / the trough
 CORAL_AT = {"score_L1": (0.50, -20.0), "score_L2": (0.84, -35.0), "score_L3": (1.24, -35.0), "score_L4": (1.86, -35.0)}
@@ -40,11 +42,17 @@ def carry(hold_algae=False):
     return np.array([STOW[j] for j in JOINTS], float)
 
 
-def target(goal, p, hold_coral, hold_algae, climbed, algae_high=False):
-    """Joint target and hopper coral position (None or 0..1) for one robot. p: dwell progress (0 = not dwelling)."""
+def target(goal, p, hold_coral, hold_algae, climbed, algae_high=False, need=None):
+    """Joint target and hopper coral position (None or 0..1) for one robot. p: dwell progress (0 = not dwelling),
+    need: the dwell's length in seconds (None: the pose follows the progress alone)."""
     q = carry(hold_algae)
     funnel = None
-    u = ease(p / RISE_AT) if p > 0 else 0.0
+    if p <= 0:
+        u = 0.0
+    elif need is not None and need > 0:
+        u = ease(p * need / min(max(RISE_AT * need, RISE_S[0]), RISE_S[1]))
+    else:
+        u = ease(p / RISE_AT)
     if goal in SCORE and p > 0:
         h, w = SCORE[goal]
         q[0], q[1] = h * u, w * u
@@ -78,8 +86,8 @@ class JointTracker:
         self.hold = [None] * n_robots
         self.funnel = [None] * n_robots
 
-    def update(self, goal_ids, progress, hold_coral, hold_algae, climbed, algae_high=None, dt=0.1):
-        """goal_ids, progress (0..1, 0 = not dwelling), hold_*, climbed, algae_high: per robot."""
+    def update(self, goal_ids, progress, hold_coral, hold_algae, climbed, algae_high=None, need=None, dt=0.1):
+        """goal_ids, progress (0..1, 0 = not dwelling), hold_*, climbed, algae_high, need (dwell seconds): per robot."""
         algae_high = np.zeros(self.n, bool) if algae_high is None else algae_high
         for r in range(self.n):
             g = self.goals[int(goal_ids[r])]
@@ -92,7 +100,8 @@ class JointTracker:
                 g, p = self.linger_goal[r], 1.0
             else:
                 p = float(progress[r])
-            tgt, self.funnel[r] = target(g, p, hc, ha, bool(climbed[r]), bool(algae_high[r]))
+            nd = None if need is None or self.linger[r] > 0 else float(need[r])
+            tgt, self.funnel[r] = target(g, p, hc, ha, bool(climbed[r]), bool(algae_high[r]), nd)
             step = RATE * dt
             self.q[r] = self.q[r] + np.clip(tgt - self.q[r], -step, step)
             self.prev_hold[r] = (hc, ha)

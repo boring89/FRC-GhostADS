@@ -4,6 +4,11 @@
 - goal head decides once per second (DECIDE_EVERY ticks), stick head every tick
 - opponents per env: SELF (both alliances learn), BASELINE (rule-based, driven inside the worker) or a frozen
   POOL snapshot; the opponent of an episode is re-drawn at every reset with PFSP weights
+- team "ours" (default): the learner drives only our robot (our robot is in both alliances, slots 0 and 3); its two
+  partners are "other teams": the baseline with random per-match styles (p_partner_baseline) or a frozen snapshot of
+  the learner, so no convention between team mates can be learned; the actor sees team mates only through what an
+  observer sees (motion, held pieces, capabilities, predicted intent). In self-play the other alliance's robot is the
+  learner too. team "all": the learner drives its whole alliance (teacher5-8)
 - the learner's alliance is drawn per episode (side_swap): our robot (slot 0) is on the learner's side or on the
   opponent's half of the time, so the win rates are not biased by it (teacher5-7: learner always blue = always with
   our robot, self-play blue won ~70 %)
@@ -40,14 +45,15 @@ class TrainCfg:
                                     # step at 1e-4 moved the stick distribution by KL 0.1-0.5 (also with a 10x
                                     # smaller rate on the stick head alone: the shared trunk moves it); at 2e-5 the
                                     # KL is ~0.007 per iteration with every minibatch used
-    lr_goal: float = 1e-4           # goal head (last layer: moves only the goal logits)
+    lr_goal: float = 3e-4           # goal head (last layer: moves only the goal logits)
     lr_critic: float = 1e-4         # critic (reads a detached embedding: cannot move the actor)
     gamma: float = GAMMA
     lam: float = 0.95
     clip: float = 0.2               # stick ratio
     clip_goal: float = 0.2          # goal ratio (decide ticks)
     vf_coef: float = 0.5
-    ent_goal: float = 0.005         # per decision (the goal loss and entropy are both averaged over decide ticks)
+    ent_goal: float = 0.02          # per decision (the goal loss and entropy are both averaged over decide ticks);
+                                    # A/B 2026-10-30: 0.02 + lr_goal 3e-4 beat 0.005 + 1e-4 by +5.2 points per match
     target_kl: float = 0.02         # actor updates of an iteration stop once a minibatch's KL exceeds 1.5x this
                                     # (the critic keeps training); the stick std is small, so its ratio moves fast
     ent_stick: float = 0.001
@@ -57,6 +63,8 @@ class TrainCfg:
     shape_anneal_iters: int = 1500
     p_self: float = 0.35
     side_swap: bool = True          # learner alliance drawn per episode
+    team: str = "ours"              # "ours": the learner drives only our robot; "all": its whole alliance
+    p_partner_baseline: float = 0.6 # partners of our robot: styled baseline, else a frozen snapshot
     pool_size: int = 8
     snapshot_every: int = 25
     d: int = 64
@@ -151,7 +159,9 @@ class Trainer:
         torch.manual_seed(cfg.seed)
         self.rng = np.random.default_rng(cfg.seed)
         self.dev = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
-        self.env = env or TeacherVecEnv(SimCfg(n_envs=cfg.envs_per_proc, sensors=False, seed=cfg.seed), cfg.n_procs)
+        from .arena import SYMMETRIC
+        slots = {"slots": SYMMETRIC} if cfg.team == "ours" else {}
+        self.env = env or TeacherVecEnv(SimCfg(n_envs=cfg.envs_per_proc, sensors=False, seed=cfg.seed, **slots), cfg.n_procs)
         self.N = self.env.n_envs
         from .obs import Encoder
         from ghostsim import load
@@ -176,6 +186,7 @@ class Trainer:
         self.pool_nets: dict[int, TeacherNet] = {}
         self.opp = np.full(self.N, -1)
         self.side = np.zeros(self.N, int)                     # learner alliance per env
+        self.drv = np.zeros((self.N, R), int)                 # who drives each robot: -1 learner, 0 baseline, k snapshot
         self.ret_rms = RunningMeanStd()
         self.it, self.steps = 0, 0
         self.out = Path(cfg.out); self.out.mkdir(parents=True, exist_ok=True)
@@ -191,13 +202,38 @@ class Trainer:
         self.opp[mask] = self.league.draw(int(mask.sum()))
         if self.cfg.side_swap:
             self.side[mask] = self.rng.integers(0, 2, int(mask.sum()))
-        self.env.set_ctrl(self._ctrl())
+        for e in np.flatnonzero(mask):
+            self.drv[e] = self._drivers(int(self.side[e]), int(self.opp[e]))
+        self.env.set_ctrl(self._ctrl(), styles=self.cfg.team == "ours")
+
+    def _partner(self):
+        snaps = sorted(self.league.snaps)
+        if not snaps or self.rng.random() < self.cfg.p_partner_baseline:
+            return 0
+        return int(self.rng.choice(snaps))
+
+    def _drivers(self, side, opp):
+        """(R,) driver of every robot of one env: -1 the learning net, 0 the baseline, k a pool snapshot."""
+        d = np.zeros(R, int)
+        mine, theirs = ALLIANCE == side, ALLIANCE != side
+        if self.cfg.team != "ours":
+            d[mine] = -1
+            d[theirs] = opp
+            return d
+        ours = np.array([0, 3])                                   # our robot in each alliance (symmetric slots)
+        for team, k in ((mine, ours[side]), (theirs, ours[1 - side])):
+            if team is theirs and opp >= 0:                       # baseline or a snapshot plays the whole alliance
+                d[team] = opp
+                continue
+            d[k] = -1
+            for q in np.flatnonzero(team):
+                if q != k:
+                    d[q] = self._partner()
+        return d
 
     def _ctrl(self):
-        """(N,2) alliances driven by the baseline inside the workers: the opponent side of baseline episodes."""
-        ctrl = np.zeros((self.N, 2), bool)
-        ctrl[np.arange(self.N), 1 - self.side] = self.opp == 0
-        return ctrl
+        """(N,R) robots driven by the baseline inside the workers."""
+        return self.drv == 0
 
     def _pool_net(self, i):
         if i not in self.pool_nets:
@@ -219,8 +255,8 @@ class Trainer:
         return t
 
     def _learner_mask(self):
-        """(N*R,) robots driven by the learning net: its alliance, and both alliances in self-play."""
-        return ((ALLIANCE[None, :] == self.side[:, None]) | (self.opp < 0)[:, None]).reshape(-1)
+        """(N*R,) robots driven by the learning net."""
+        return (self.drv == -1).reshape(-1)
 
     @torch.no_grad()
     def _act(self, t, deterministic=False):
@@ -228,11 +264,10 @@ class Trainer:
         std = self.net.stick_log_std().exp().expand_as(mu)
         goal = logits.argmax(-1) if deterministic else torch.distributions.Categorical(logits=logits).sample()
         stick = mu if deterministic else mu + std * torch.randn_like(mu)
-        # frozen pool opponents (the other alliance of their envs)
-        opp = torch.from_numpy(np.repeat(self.opp, R)).to(self.dev)
-        other = torch.from_numpy((ALLIANCE[None, :] != self.side[:, None]).reshape(-1)).to(self.dev)
-        for i in np.unique(self.opp[self.opp > 0]):
-            sel = (opp == i) & other
+        # robots driven by frozen pool snapshots (opponents, and partners of our robot)
+        drv = torch.from_numpy(self.drv.reshape(-1)).to(self.dev)
+        for i in np.unique(self.drv[self.drv > 0]):
+            sel = drv == int(i)
             sub = {k: v[sel] for k, v in t.items()}
             pn = self._pool_net(int(i))
             lg, m2, _ = pn(sub)
@@ -405,7 +440,8 @@ class Trainer:
             if self.it % self.cfg.snapshot_every == 0:
                 self.league.add(self.net.state_dict(), win=0.5)
                 self.pool_nets.clear()
-                stale = stale_opponents(self.opp, self.league)
+                stale = stale_opponents(self.opp, self.league) | \
+                    ((self.drv > 0) & ~np.isin(self.drv, list(self.league.snaps))).any(1)
                 if stale.any():
                     self._assign(stale)
             ep = self.stats["ep"]

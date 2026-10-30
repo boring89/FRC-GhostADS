@@ -18,13 +18,21 @@ def test_summary_win_rate_score_difference_and_sides():
     assert r["win_blue"] == 0.5 and r["win_red"] == 0.75 and r["win_ci"][0] < r["win"] < r["win_ci"][1]
 
 
+def test_team_masks():
+    a, b = arena.masks(4, "ours")
+    assert a[0].tolist() == [1, 0, 0, 0, 0, 0] and b[0].tolist() == [0, 0, 0, 1, 0, 0]       # A blue in env 0
+    assert a[1].tolist() == [0, 0, 0, 1, 0, 0] and b[1].tolist() == [1, 0, 0, 0, 0, 0]       # A red in env 1
+    a, b = arena.masks(2, "all", b_is_net=False)
+    assert a[0].tolist() == [1, 1, 1, 0, 0, 0] and not b.any()
+
+
 def test_arena_plays_whole_matches_on_both_sides_with_symmetric_slots():
     env = arena.ArenaEnv(SimCfg(n_envs=2, sensors=False, seed=0, slots=arena.SYMMETRIC), 1, in_process=True)
     w = env.local[0]
     assert (w.trunc_at >= 10 ** 9).all()                                      # no desync cut
     assert w.sim.prm.quality[0, 0] == w.sim.prm.quality[0, 3]                 # our robot in both alliances
     net = TeacherNet(14, w.enc.G).eval()
-    r = arena.play(net, "baseline", episodes=2, n_procs=1, envs_per_proc=2, device="cpu", in_process=True)
+    r = arena.play(net, "baseline", episodes=2, n_procs=1, envs_per_proc=2, device="cpu", in_process=True, team="all")
     assert r["episodes"] == 2 and "win_blue" in r and "win_red" in r            # one match per side
     assert r["score_b"] > r["score_a"]                                        # an untrained net loses to the baseline
 

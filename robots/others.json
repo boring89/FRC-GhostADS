@@ -1,25 +1,25 @@
 {
  "name": "others",
  "base": "ours.json",
- "_note": "Partners/opponents: 2025 FIRST Championship division level (MODEL, calibrated in docs/training.md against NEWTON + HOPPER qualification breakdowns). One quality q per robot and reset; q = 1 is about our robot (FRC 254 numbers).",
+ "_note": "Partners/opponents (MODEL): every robot close to ours (user's choice 2026-10-30: show the scoring limit, an Einstein-like field, not stronger than real robots). One quality q per robot and reset; q = 1 is about our robot (FRC 254 numbers).",
  "quality": [
-  0.0,
-  0.95
+  0.8,
+  1.0
  ],
  "by_quality": {
-  "_note": "[value at q=0, value at q=1(, gamma)]: v1 + (v0 - v1) * (1 - q)**gamma. Calibrated (tools/calib_others.py solo) so that pieces per match relative to our robot follow the 2025 Champs NEWTON + HOPPER teams relative to the 97th-percentile team: p10 0.30, p25 0.45, p50 0.61, p75 0.75, p90 0.85.",
+  "_note": "[value at q=0, value at q=1(, gamma)]: v1 + (v0 - v1) * (1 - q)**gamma. A weak robot is slower in several ways (drive speed and acceleration, mechanism and alignment time at most 2x / 2.5x, more misses) instead of mostly standing still (times 5x and alignment 7x before 2026-10-30). tools/calib_others.py solo, pieces per match relative to our robot: q 0 0.50, 0.25 0.62, 0.5 0.77, 0.75 0.86, 1 1.04; quality U(0.8, 1.0) gives 0.88-1.04 (2025 Champs division quals were p10 0.30, p50 0.61, p90 0.85).",
   "times_scale": [
-   5.0,
+   2.0,
    1.0,
    1.1
   ],
   "align_scale": [
-   7.0,
+   2.5,
    1.0,
    1.1
   ],
   "control.max_speed_mps": [
-   2.6,
+   3.0,
    4.2,
    1.1
   ],
@@ -119,7 +119,11 @@
     0.95,
     1.1
    ]
-  }
+  },
+  "drive.current_limit_A": [
+   60.0,
+   100.0
+  ]
  },
  "uniform": {
   "frame_in": [
@@ -141,10 +145,6 @@
   "drive.mu_static": [
    0.95,
    1.2
-  ],
-  "drive.current_limit_A": [
-   60.0,
-   100.0
   ],
   "control.max_omega_radps": [
    5.0,

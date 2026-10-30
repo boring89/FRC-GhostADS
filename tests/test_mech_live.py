@@ -37,6 +37,18 @@ def test_elevator_follows_the_dwell_and_is_rate_limited():
     assert hs[int(n * RISE_AT) - 1] < h_top and hs[int(n * RISE_AT) + 2] > 0.9 * h_top
 
 
+def test_slow_robot_raises_the_elevator_at_normal_speed():
+    """A 4 s dwell (a slow partner): the score pose is reached ~1 s into the dwell, not at 70 % (2.8 s)."""
+    tr = JointTracker(GAME.goals, 6)
+    need = np.full(6, 4.0)
+    h_top = SCORE["score_L4"][0]
+    for k in range(40):                                         # 4 s dwell at 0.1 s per tick
+        tr.update(np.array([G["score_L4"]] * 6), np.full(6, (k + 1) / 40), [True] * 6, Z, Z, need=need, dt=0.1)
+        if k == 11:
+            assert abs(tr.q[0, 0] - h_top) < 1e-6               # up after 1.2 s
+    assert abs(tr.q[0, 0] - h_top) < 1e-6
+
+
 def test_pose_is_held_after_release_then_returns():
     tr = JointTracker(GAME.goals, 6)
     for k in range(10):

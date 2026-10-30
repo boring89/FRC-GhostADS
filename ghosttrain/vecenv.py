@@ -26,11 +26,15 @@ class _Worker:
         warnings.filterwarnings("ignore")
         from ghostsim.sim import VecSim
         from .baseline import Baseline
-        from .obs import Encoder
+        from .obs import Encoder, ReefReport
         self.sim = VecSim(cfg)
         self.n = cfg.n_envs
         self.enc, self.bl = Encoder(self.sim.game), Baseline(self.sim.game)
+        self.rng = np.random.default_rng(cfg.seed + 7)
+        self.reef = ReefReport(self.n, self.sim.game.l1_cap, np.random.default_rng(cfg.seed + 11))   # actor's reef view
         self.ctrl = np.zeros((self.n, 2), bool)                  # True: alliance is driven by the baseline
+        self.ctrl_r = None                                        # or per robot (n,R): independent training
+        self.styles = False                                       # baseline-driven robots get random styles per match
         self._fresh()
         self.prev_score = self.sim.score.copy()
         self.prev_dmg = self.sim.gs.damage.copy()
@@ -38,7 +42,6 @@ class _Worker:
         self.plan_cache = None
         self.noise = 0.0                                          # exec noise on baseline-driven robots (labels stay clean)
         self.label_all = False                                    # DAgger: baseline labels for every robot, whoever drives
-        self.rng = np.random.default_rng(cfg.seed + 7)
         self.trunc_at = self.rng.integers(20, 1300, self.n)       # desynchronise the envs: first episode is cut short
 
     def _fresh(self, mask=None):
@@ -49,17 +52,25 @@ class _Worker:
             self.prev_hold = np.zeros((self.n, 6, 2), bool)
             self.phi = np.zeros((self.n, 6))
         self.goal[m], self.tick[m] = 0, 0
+        self.reef.reset(m)
+        if self.styles:
+            self.bl.restyle(self.n, m, self.rng, on=True)
 
     def _phi(self, plan):
         _, tgt, _ = plan
         d = np.linalg.norm(tgt - self.sim.body.pose[..., :2], axis=-1)
         return -np.minimum(d, 20.0) / 20.0
 
-    def _obs(self):
+    def _bl_mask(self):
+        """(n,R) robots driven by the baseline."""
         from ghostsim.robots import ALLIANCE
-        o = self.enc.encode(self.sim, self.goal)
+        return self.ctrl_r if self.ctrl_r is not None else self.ctrl[:, ALLIANCE]
+
+    def _obs(self):
+        self.reef.step(self.sim)                                  # once per policy tick
+        o = self.enc.encode(self.sim, self.goal, self.reef)
         o["decide"] = (self.tick % DECIDE_EVERY == 0)
-        o["bl"] = self.ctrl[:, ALLIANCE]
+        o["bl"] = self._bl_mask()
         return o
 
     def reset(self):
@@ -80,7 +91,7 @@ class _Worker:
         dec = (self.tick % DECIDE_EVERY == 0)[:, None]
         self.goal = np.where(dec, goal_new, self.goal)                          # held goal = what the observation shows
         exec_goal = self.goal.copy()
-        bl_m = self.ctrl[:, ALLIANCE]                                           # (n,R)
+        bl_m = self._bl_mask()                                                  # (n,R)
         bst = None
         if bl_m.any() or self.label_all:
             bst, _ = self.bl.act(sim, plan)
@@ -152,12 +163,22 @@ class _Worker:
                 "final": final, "final_cat": final_cat, "final_rule": final_rule,
                 "pts": info.points.astype(np.float32), "fouls": info.fouls.astype(np.float32)}
 
-    def set_ctrl(self, c, noise=None, label_all=None):
-        self.ctrl = np.asarray(c, bool)
+    def set_ctrl(self, c, noise=None, label_all=None, styles=None):
+        """c: (n,2) alliances or (n,R) robots driven by the baseline. styles: random baseline styles per match."""
+        from ghostsim.robots import ALLIANCE
+        c = np.asarray(c, bool)
+        if c.shape[1] == 2:
+            self.ctrl, self.ctrl_r = c, None
+        else:
+            self.ctrl_r = c
+            self.ctrl = np.stack([c[:, ALLIANCE == a].all(1) for a in (0, 1)], 1)
         if noise is not None:
             self.noise = float(noise)
         if label_all is not None:
             self.label_all = bool(label_all)
+        if styles is not None and bool(styles) != self.styles:
+            self.styles = bool(styles)
+            self.bl.restyle(self.n, np.ones(self.n, bool), self.rng, on=self.styles)
 
 
 R_ = 6
@@ -220,15 +241,16 @@ class TeacherVecEnv:
         res["obs"] = _cat([o["obs"] for o in outs])
         return res
 
-    def set_ctrl(self, ctrl, noise=None, label_all=None):
-        """ctrl (n_envs, 2) bool: alliance driven by the baseline policy. noise: exec noise std on its stick.
-        label_all: act_stick / act_goal are the baseline's actions for every robot (DAgger labels)."""
+    def set_ctrl(self, ctrl, noise=None, label_all=None, styles=None):
+        """ctrl (n_envs, 2) bool: alliance driven by the baseline policy, or (n_envs, R): per robot. noise: exec
+        noise std on its stick. label_all: act_stick / act_goal are the baseline's actions for every robot (DAgger
+        labels). styles: baseline-driven robots play with random per-match styles (independent training)."""
         if self.in_process:
             for i, w in enumerate(self.local):
-                w.set_ctrl(self._sl(ctrl, i), noise, label_all)
+                w.set_ctrl(self._sl(ctrl, i), noise, label_all, styles)
             return
         for i, c in enumerate(self.conns):
-            c.send(("ctrl", self._sl(ctrl, i), noise, label_all))
+            c.send(("ctrl", self._sl(ctrl, i), noise, label_all, styles))
         [c.recv() for c in self.conns]
 
     def close(self):

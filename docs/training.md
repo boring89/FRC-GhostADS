@@ -301,6 +301,39 @@ always blue = always with our robot (self-play blue won ~70 %, the baseline win 
   98 %). The curves page no longer opens the stream by itself (play button), pages drop the stream while hidden, and
   the live view renders at 15 fps while the run trains (log.jsonl written in the last 2 min), 30 otherwise.
 
+## Independent robots: our robot only, partners we do not control, a relayed reef (2026-10-30)
+On the field we drive one robot; the partners are other teams. Until teacher8 the learner drove its whole alliance
+with one shared net and a shared reward, which can learn conventions between team mates that real partners never
+follow. Now (`TrainCfg.team = "ours"`, default):
+- Our robot is in both alliances (slots 0 and 3, `arena.SYMMETRIC`); the learner drives only its alliance's copy
+  (and the other alliance's copy in self-play). Each partner is drawn per match: the baseline with a random style
+  (`p_partner_baseline` 0.6: how much it goes for algae on the floor / reef, net vs processor, when it leaves for the
+  endgame, how hard it drives; `Baseline.restyle`) or a frozen snapshot of the learner from the pool (0.4). The
+  current net never plays its own partner. A baseline or pool opponent plays its whole alliance.
+- The actor sees other robots only as an observer would: pose, motion, held pieces, capabilities, and the intent
+  predictor's guess from those (`ghosttrain/intent.py`, now collected with styled baselines and a trained net as
+  drivers). The centralised critic keeps the full state (training only).
+- Reef relay (`obs.ReefReport`, in every worker): the actor's reef faces (branches, trough counts, algae) are a
+  person's report: updated about once a second (random phase), 0.5-1 s late (drawn per match), each cell wrong with
+  probability 0.02 per update (a wrong trough count is off by one). The rules, the baseline and the critic use the
+  true state.
+- Evaluation and the live view play the same way: `arena.py --team ours` (default) and the dashboard's `--team ours`
+  (default): each policy drives our robot of its alliance, baselines drive the partners.
+- Cost: 1-2 learner robots per env instead of 3-6, so ~3x fewer learner samples per iteration.
+
+## Dashboard that keeps streaming (2026-10-30)
+`uv run python -m ghosttrain.dashboard runs --follow [--lite]`:
+- `--follow`: RUN is a directory of runs; the curves and the live view show the run whose log.jsonl was written last,
+  so a new training run takes over without a restart.
+- The live simulation (a child process) reloads after the current match when code or data under ghostsim/,
+  ghosttrain/, game/ or robots/ changed (or within 30 s while nobody watches); the HTTP server, the renderers and the
+  stream keep running. Changes to the renderer side (broadcast.py, dashboard.py, the Godot scene) still need a restart.
+- A checkpoint that cannot be loaded leaves the previous net playing (message in the status line).
+- `--lite`: 1280x720, field.glb instead of field_hi.glb, no MSAA, 20 fps (10 while training). Measured with training
+  running: ~10 frames/s delivered.
+- Renderer ports come from the HTTP port (8777: 48631-48633, ports in use skipped), so a second dashboard does not
+  talk to the first one's Godot instances.
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.
