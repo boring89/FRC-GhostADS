@@ -30,8 +30,9 @@ def test_nominal_values_without_randomisation():
 
 
 def test_others_vary_capabilities():
+    """Strong field (quality 0.8-1.0): nearly every robot scores L4, capabilities still vary a little."""
     p = sample_params([load_profile("others.json")] * 6, 300, GOALS, np.random.default_rng(1))
-    assert 0.3 < p.levels[..., 3].mean() < 0.9 and 0 < p.net.mean() < 1 and p.climb.max() == 2
+    assert 0.9 < p.levels[..., 3].mean() < 1.0 and 0.5 < p.net.mean() < 1 and p.climb.max() == 2
 
 
 def test_randomised_episodes_differ_per_reset():
@@ -61,17 +62,18 @@ def test_elevator_robot_cannot_climb_but_uses_processor():
 
 def test_others_quality_makes_strong_robots_strong_in_every_respect():
     """robots/others.json: one quality q per robot drives mechanism time, alignment, speed, capabilities and success
-    together (2025 Champs pool); q never exceeds our robot (FRC 254 numbers)."""
+    together; every robot is close to ours (quality 0.8-1.0) and none is better (FRC 254 numbers)."""
     p = sample_params([load_profile("others.json")] * 6, 400, GOALS, np.random.default_rng(3))
     ours = sample_params([load_profile("ours.json")] * 6, 1, GOALS, np.random.default_rng(3), randomize=False)
     q = p.quality.reshape(-1)
-    assert 0.0 <= q.min() and q.max() <= 0.95
+    assert 0.8 <= q.min() and q.max() <= 1.0
     t_l4 = p.times[..., GOALS.index("score_L4")].reshape(-1)
-    for v, sign in ((t_l4, -1), (p.align_scale.reshape(-1), -1), (p.max_v.reshape(-1), 1),
-                    (p.succ[..., GOALS.index("score_L4")].reshape(-1), 1)):
+    for v, sign in ((t_l4, -1), (p.align_scale.reshape(-1), -1), (p.succ[..., GOALS.index("score_L4")].reshape(-1), 1)):
         assert sign * np.corrcoef(q, v)[0, 1] > 0.8
+    assert np.corrcoef(q, p.max_v.reshape(-1))[0, 1] > 0.05 and p.max_v.mean() > 3.5      # mostly capped by each
+                                                                                           # drive's free speed
     assert t_l4.min() >= ours.times[0, 0, GOALS.index("score_L4")] - 1e-9                 # nobody faster than 254
     assert (p.align_scale >= 1.0).all()
-    hi, lo = q > 0.7, q < 0.3
-    assert p.levels[..., 3].reshape(-1)[hi].mean() > p.levels[..., 3].reshape(-1)[lo].mean()
-    assert (p.climb == 1).mean() < 0.05 and 0.55 < (p.climb == 2).mean() < 0.85             # deep cages at Champs
+    hi, lo = q > 0.95, q < 0.85
+    assert p.levels[..., 3].reshape(-1)[hi].mean() >= p.levels[..., 3].reshape(-1)[lo].mean()
+    assert (p.climb == 1).mean() < 0.05 and (p.climb == 2).mean() > 0.8                    # strong field: deep cage

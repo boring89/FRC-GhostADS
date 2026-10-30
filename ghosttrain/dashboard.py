@@ -227,13 +227,14 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     run = Path(a.run)
     bc = None if a.no_live else Broadcast(run, a.opponent, team=a.team, follow=a.follow, lite=a.lite, http_port=a.port)
-    if bc:
-        bc.start()
-    try:
+    try:                                              # listen first: a busy port must not leave renderers behind
         srv = ThreadingHTTPServer((a.host, a.port), make_handler(run, bc, a.follow))
     except OSError as e:
-        print(f"cannot listen on {a.host}:{a.port} ({e}); try --port <other>", file=sys.stderr)
+        print(f"cannot listen on {a.host}:{a.port} ({e}); stop the dashboard that uses it or try --port <other>",
+              file=sys.stderr)
         return 1
+    if bc:
+        bc.start()
     print(f"dashboard on http://{a.host}:{a.port}  (curves /, broadcast /live, robot view /robot)", flush=True)
     try:
         srv.serve_forever()

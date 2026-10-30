@@ -18,7 +18,20 @@ from . import protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = Path(__file__).resolve().parent / "godot"
-DEFAULT_BIN = ROOT / "tools" / "godot" / "Godot_v4.7.2-stable_linux.x86_64"
+GODOT_NAME = "Godot_v4.7.2-stable_linux.x86_64"
+
+
+def _default_bin():
+    """tools/godot/ of this checkout, else of an enclosing one (a git worktree under <repo>/.claude/worktrees/ uses
+    the engine downloaded into the main checkout)."""
+    for d in (ROOT, *ROOT.parents):
+        b = d / "tools" / "godot" / GODOT_NAME
+        if b.exists():
+            return b
+    return ROOT / "tools" / "godot" / GODOT_NAME
+
+
+DEFAULT_BIN = _default_bin()
 
 
 def rig_dict(cam: dict) -> dict:
