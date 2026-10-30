@@ -388,12 +388,11 @@ class Trainer:
 
     @torch.no_grad()
     def _value_of(self, data, idx):
+        """Critic values of every sample (in chunks). Until 2026-10-30 only the first 16384 were evaluated and the
+        rest counted as 0, so the logged explained variance read ~0.155 for a critic at ~0.95 (n ~ 100k)."""
         n = idx.numel()
-        out = []
-        for s in range(0, min(n, 16384), 4096):
-            out.append(self.net({k: v[s:s + 4096] for k, v in data.items() if k != "decide"})[2])
-        v = torch.cat(out)
-        return torch.cat([v, torch.zeros(n - v.numel(), device=self.dev)]) if v.numel() < n else v
+        return torch.cat([self.net({k: v[s:s + 4096] for k, v in data.items() if k != "decide"})[2]
+                          for s in range(0, n, 4096)])
 
     # ------------------------------------------------------------------ loop
     def train(self, iters):

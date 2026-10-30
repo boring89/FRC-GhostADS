@@ -323,3 +323,20 @@ def test_kl_target_stops_actor_updates_but_not_the_critic(tmp_path):
         assert tr.train(1)["actor_frac"] == 1.0
     finally:
         tr.close()
+
+
+def test_explained_variance_uses_every_sample(tmp_path):
+    """_value_of returns the critic value of every sample (it used to stop at 16384 and pad with zeros)."""
+    cfg = TrainCfg(n_procs=1, envs_per_proc=4, horizon=8, device="cpu", out=str(tmp_path))
+    tr = Trainer(cfg, TeacherVecEnv(SimCfg(n_envs=4, sensors=False, seed=0), 1, in_process=True))
+    try:
+        buf, acts, _, _ = tr.rollout()
+        idx = acts["lm"].reshape(-1).nonzero()[:, 0]
+        flat = lambda x: x.reshape(-1, *x.shape[2:])
+        data = {k: flat(v)[idx] for k, v in buf.items()}
+        v = tr._value_of(data, idx)
+        with torch.no_grad():
+            ref = tr.net({k: d for k, d in data.items() if k != "decide"})[2]
+        assert v.shape == ref.shape and torch.allclose(v, ref, atol=1e-5)
+    finally:
+        tr.close()

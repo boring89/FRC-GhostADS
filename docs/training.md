@@ -275,6 +275,18 @@ always blue = always with our robot (self-play blue won ~70 %, the baseline win 
   From round 30 on, a growing share of envs (up to 80 %) is driven by the net while the baseline labels every robot
   (`label_all` in the workers); the last 3 rounds are trained together. bc9: 117 vs 116 deterministic.
 
+## teacher8 evaluation and the explained-variance bug (2026-10-30)
+- iter 1540 (192-200 matches each): vs baseline win 0.83 (CI 0.77-0.88), 156 vs 117 (deterministic and stochastic
+  alike; the bc9 start was 0.46, 117-116). Head-to-head: vs iter 500 0.53-0.56 (156 vs 148-150), vs iter 1000 0.54
+  (159 vs 159): most of the gain came before iter ~500-1000. In head-to-heads the team with our robot (blue) wins
+  ~0.8, so compare scores rather than win rates there.
+- The logged critic explained variance (~0.155 all run) was wrong: `_value_of` evaluated only the first 16384 samples
+  and counted the rest (~83 % at n ~ 100k) as 0. Measured correctly on fresh rollouts of iter 1700: 0.94-0.97. Fixed,
+  with a test. The critic is not the bottleneck.
+- What barely moves is the goal head: goal entropy 0.13-0.16 the whole run (one goal ~97 % of the time), goal KL
+  ~3e-4 per iteration (stick ~8e-3). A/B from iter 1710 (interleaved 50-iteration blocks, same machine load): control
+  vs `--ent_goal 0.02 --lr_goal 3e-4` (runs/teacher8_goal).
+
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up
   after 1 s stuck, V_MAX 3.0, V_GAIN 4.0, YAW_GAIN 10). Standalone 12 seeds: 12/12 aligned in 1.4-7.1 s.
