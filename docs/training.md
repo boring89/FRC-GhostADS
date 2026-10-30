@@ -8,7 +8,8 @@ Everything runs on the P520: 12 sim worker processes (CPU) + the learner on the 
 uv run python -m ghosttrain.bc --out runs/bc9                        # 1. clone the baseline with DAgger (~30 min)
 sh tools/run_forever.sh runs/bc9/bc_net.pt runs/teacher8              # 2. MAPPO self-play + league, restarts on crashes
 # (or one bounded run: uv run python -m ghosttrain.train --init runs/bc9/bc_net.pt --iters 2000 --out runs/teacher)
-uv run python -m ghosttrain.evaluate runs/teacher/latest_net.pt --episodes 200   # 3. win rate vs baseline, both colours
+uv run python -m ghosttrain.eval_watch runs/teacher8 --init runs/bc9/bc_net.pt     # 3. evaluates every 250th snapshot
+uv run python -m ghosttrain.arena runs/teacher8/iter_002000.pt baseline           #    one-off: A vs B (or the baseline)
 uv run python -m ghosttrain.replay runs/teacher/latest_net.pt --matches 10 --out runs/teacher/replays   # 4. videos + audit
 ```
 `uv run python -m ghosttrain.dashboard runs/teacher` serves live curves, an anomaly table and a live match at
@@ -286,6 +287,19 @@ always blue = always with our robot (self-play blue won ~70 %, the baseline win 
 - What barely moves is the goal head: goal entropy 0.13-0.16 the whole run (one goal ~97 % of the time), goal KL
   ~3e-4 per iteration (stick ~8e-3). A/B from iter 1710 (interleaved 50-iteration blocks, same machine load): control
   vs `--ent_goal 0.02 --lr_goal 3e-4` (runs/teacher8_goal).
+
+## Evaluation tools and the live view's GPU cost (2026-10-30)
+- `ghosttrain/arena.py`: A vs B (a checkpoint or `baseline`) in whole matches (no desync cut), A on blue in half the
+  envs and on red in the other half, symmetric slots by default (our robot in both alliances: the training slots
+  make the side with our robot win ~0.8 of head-to-heads and hide policy differences), deterministic by default.
+  Reports the win rate (Wilson CI) and the mean score difference with a 95 % CI, overall and per side.
+- `ghosttrain/eval_watch.py`: next to a training run, evaluates every 250th snapshot against the baseline, the warm
+  start (`--init`) and the snapshot evaluated before it (positive = still improving); rows in `<run>/eval.jsonl`,
+  plotted on the dashboard; the evaluated nets are kept in `<run>/eval_snaps` (run_forever.sh now keeps every 250th
+  snapshot). 96 matches x 3 references with 4 sim processes.
+- Live view: with the dashboard's live view playing, the training ran at ~4.7k agent-steps/s instead of ~10.8k (GPU at
+  98 %). The curves page no longer opens the stream by itself (play button), pages drop the stream while hidden, and
+  the live view renders at 15 fps while the run trains (log.jsonl written in the last 2 min), 30 otherwise.
 
 ## Known issues / next steps
 - Align timing (tuned): time-to-aligned median 4.6 s -> 2.7 s (dwell 0.5 s, waypoint only for large offsets, give-up

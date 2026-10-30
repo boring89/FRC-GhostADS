@@ -2,7 +2,8 @@
 # Unbounded MAPPO training with restarts. Resumes from the newest snapshot in OUT after any crash.
 #   sh tools/run_forever.sh <start: bc_net.pt or iter_*.pt> <out-dir> [extra ghosttrain.train options]
 # A fresh OUT starts from START (--init for a behaviour-cloned net, --resume for a training snapshot).
-# Keeps the 200 newest snapshots plus every 500th iteration; prunes at each restart.
+# Keeps the 200 newest snapshots plus every 250th iteration (ghosttrain/eval_watch.py evaluates those); prunes
+# at each restart.
 START="$1"; OUT="$2"; shift 2
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/bin:$PATH"
@@ -10,7 +11,7 @@ mkdir -p "$OUT"
 prune() {
   ls "$OUT"/iter_*.pt 2>/dev/null | sort | head -n -200 | while read f; do
     n=$(basename "$f" .pt | sed 's/iter_0*//'); [ -z "$n" ] && n=0
-    [ $((n % 500)) -eq 0 ] || rm -f "$f"
+    [ $((n % 250)) -eq 0 ] || rm -f "$f"
   done
 }
 while true; do

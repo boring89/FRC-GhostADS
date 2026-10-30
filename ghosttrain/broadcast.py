@@ -1,4 +1,5 @@
-"""Live broadcast of training matches: 1920x1080 at 30 fps, rendered only while someone is watching.
+"""Live broadcast of training matches: 1920x1080 at 30 fps (15 while the run is training), rendered only while
+someone is watching (pages stop their stream when hidden; the curves page plays it on demand).
 
 Layout of the video (no graphics in it: the scoreboard, tile labels and the result card are an HTML overlay on the
 /live page, fed by Broadcast.live / live_state(), so they stay sharp at any size and cost no rendering):
@@ -29,6 +30,8 @@ CANVAS = (1920, 1080)
 TOP = (1920, 720)
 TILE = (960, 360)
 FPS = 30
+FPS_TRAINING = 15         # while the run is training (log.jsonl written in the last TRAINING_IDLE_S): the live view
+TRAINING_IDLE_S = 120.0   # shares the GPU with the learner (at 30 fps the training ran at ~45 % of its speed)
 RESULT_S = 10.0
 TILE_CHANGE_S = 10.0
 GOAL_LABEL = {"idle": "IDLE", "coral_station": "CORAL STATION", "coral_floor": "CORAL FLOOR", "algae_floor": "ALGAE FLOOR",
@@ -234,6 +237,15 @@ class Broadcast:
                     self.frames[key], self.seq[key] = jpg, self.seq[key] + 1
                     self.cond.notify_all()
 
+    def fps(self):
+        """Frame rate: FPS, or FPS_TRAINING while log.jsonl is being written (checked at most every 5 s)."""
+        now = time.time()
+        if now - getattr(self, "_fps_t", 0.0) >= 5.0:
+            p = self.run / "log.jsonl"
+            busy = p.exists() and now - p.stat().st_mtime < TRAINING_IDLE_S
+            self._fps_t, self._fps_v = now, FPS_TRAINING if busy else FPS
+        return self._fps_v
+
     def training_step(self):
         """Latest training step from log.jsonl, re-read at most every 2 s."""
         now = time.time()
@@ -385,7 +397,7 @@ class Broadcast:
                     cam = cv2.cvtColor(img_rob[0], cv2.COLOR_RGB2BGR)
                     self._overlay_robot(cam, latest, tags, tag_ids)
                     self._publish("robot", cam)
-                time.sleep(max(0.0, 1.0 / FPS - (time.time() - t_frame)))
+                time.sleep(max(0.0, 1.0 / self.fps() - (time.time() - t_frame)))
         finally:
             for rc in clients + ([rc_robot] if rc_robot is not None else []):
                 try:

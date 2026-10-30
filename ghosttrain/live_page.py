@@ -120,4 +120,6 @@ async function up(){let s;try{s=await (await fetch("/api/live")).json()}catch(e)
  pills($("sl"),s.cats[0]);pills($("sr"),s.cats[1]);
  tile($("tb"),$("stb"),s.tiles&&s.tiles[0]);tile($("tr"),$("str"),s.tiles&&s.tiles[1])}
 setInterval(up,100);up();
+// no stream while the tab is hidden: the server renders only for connected viewers
+document.addEventListener("visibilitychange",()=>{$("v").src=document.hidden?"":"/stream.mjpg"});
 </script></body></html>"""

@@ -32,7 +32,10 @@ img{display:block;border-radius:4px;background:#000}
 <div class="row" id="charts"></div>
 <div class="row" style="margin-top:10px">
   <div class="card"><div class="small">live match (newest checkpoint) &mdash; <span id="live"></span></div>
-    <a href="/live" target="_blank"><img id="stream" src="/stream.mjpg" style="width:640px;height:360px" title="click: open fullscreen viewer"></a>
+    <div id="thumb" style="width:640px;height:360px;background:#0b0d10;display:flex;align-items:center;justify-content:center">
+      <button id="play" style="font-size:18px;padding:10px 18px">&#9654; play live here</button>
+      <img id="stream" style="width:640px;height:360px;display:none" title="click: stop"></div>
+    <div class="small">the live view renders only while it plays (it slows the training while it does)</div>
     <div class="small"><a href="/live" target="_blank" style="color:#8ab4f8">open fullscreen viewer</a> (F or double-click toggles fullscreen)</div></div>
   <div class="card" style="min-width:420px"><div class="small">latest anomalies (score &gt; 250 or fouls &gt; 40)</div>
     <table id="anom"></table></div>
@@ -44,7 +47,9 @@ const CH=[
  {t:"fouls committed per alliance per match",keys:[["foul_mean","#ffb74d"]],log:true},
  {t:"goal entropy (ln13=2.56)",keys:[["ent_goal","#ba68c8"]]},
  {t:"approx KL / clip fraction (stick, goal) / share of minibatches updating the actor",keys:[["kl","#4dd0e1"],["clip_stick","#f06292"],["clip_goal","#ffb74d"],["actor_frac","#90a4ae"]]},
- {t:"stick std (floor 0.1)",keys:[["std_stick","#81c784"],["std_stick_min","#388e3c"]]},
+ {t:"evaluation: score difference vs references (eval_watch.py: symmetric slots, deterministic)",src:"eval",keys:[["diff_baseline","#4caf50"],["diff_init","#ffb74d"],["diff_prev","#4da3ff"]],ref:[0]},
+ {t:"evaluation: win rate vs references",src:"eval",keys:[["win_baseline","#4caf50"],["win_init","#ffb74d"],["win_prev","#4da3ff"]],ref:[0.5],y:[0,1]},
+ {t:"stick std (floor 0.03)",keys:[["std_stick","#81c784"],["std_stick_min","#388e3c"]]},
  {t:"gradient norm before clipping (actor, critic)",keys:[["gn_actor","#e57373"],["gn_critic","#64b5f6"]],log:true},
  {t:"critic explained variance",keys:[["expl_var","#aed581"]],y:[-0.2,1]},
  {t:"agent-steps / s",keys:[["sps","#90a4ae"]]},
@@ -70,13 +75,20 @@ function draw(i,rows){const c=CH[i],cv=document.getElementById("c"+i),g=cv.getCo
  let lx=44;for(const [s,col,k] of series){g.fillStyle=col;const last=[...s].reverse().find(v=>v!=null);
   g.fillText(k+(last!=null?" "+last.toPrecision(3):""),lx,10);lx+=110}}
 async function tick(){
- try{const rows=await (await fetch("/api/log?n=1500")).json();if(rows.length){CH.forEach((_,i)=>draw(i,rows));
+ try{const ev=await (await fetch("/api/eval")).json();if(ev.length)CH.forEach((c,i)=>{if(c.src=="eval")draw(i,ev)})}catch(e){}
+ try{const rows=await (await fetch("/api/log?n=1500")).json();if(rows.length){CH.forEach((c,i)=>{if(c.src!="eval")draw(i,rows)});
   const r=rows[rows.length-1];document.getElementById("stat").textContent="iteration "+r.it+" | "+(r.steps/1e6).toFixed(1)+"M agent-steps | pool "+r.pool+" | shaping weight "+r.w_shape.toFixed(2)}}catch(e){}
  try{const a=await (await fetch("/api/anomalies")).json();document.getElementById("anom").innerHTML="<tr><th>it</th><th>opp</th><th>score b/r</th><th>fouls b/r</th></tr>"+
   a.map(x=>"<tr><td>"+x.it+"</td><td>"+x.opp+"</td><td>"+x.score.join(" / ")+"</td><td>"+x.fouls_committed.join(" / ")+"</td></tr>").join("")}catch(e){}
  try{const s=await (await fetch("/api/status")).json();document.getElementById("live").textContent=s.live}catch(e){}
 }
 tick();setInterval(tick,5000);
+// live thumbnail: plays only on demand and while the tab is visible (the server renders only for open streams)
+const st=document.getElementById("stream"),pb=document.getElementById("play");let playing=false;
+function setPlay(on){playing=on;st.style.display=on?"block":"none";pb.style.display=on?"none":"block";
+ st.src=on&&!document.hidden?"/stream.mjpg":""}
+pb.onclick=()=>setPlay(true);st.onclick=()=>setPlay(false);
+document.addEventListener("visibilitychange",()=>{if(playing)st.src=document.hidden?"":"/stream.mjpg"});
 </script></body></html>"""
 
 
@@ -97,7 +109,8 @@ pre{background:#1d2026;padding:10px;border-radius:4px;min-width:340px;white-spac
 const q=new URLSearchParams(location.search); const id=parseInt(q.get("id")||"1");
 const bar=document.getElementById("bar");
 for(let i=1;i<=6;i++){const a=document.createElement("a");a.href="/robot?id="+i;a.textContent="robot "+i+(i<=3?" (blue)":" (red)");if(i==id)a.className="on";bar.appendChild(a);}
-document.getElementById("s").src="/robot.mjpg?id="+(id-1);
+const play=()=>{document.getElementById("s").src=document.hidden?"":"/robot.mjpg?id="+(id-1)};
+document.addEventListener("visibilitychange",play);play();
 async function up(){try{const r=await (await fetch("/api/robot?id="+(id-1))).json();
 document.getElementById("st").textContent=JSON.stringify(r,null,1);}catch(e){}}
 setInterval(up,500);up();
@@ -162,6 +175,8 @@ def make_handler(run: Path, bc: Broadcast | None):
                 self._send(ROBOT_PAGE.encode(), "text/html; charset=utf-8")
             elif path == "/api/log":
                 self._send(json.dumps(self._rows("log.jsonl", n)).encode())
+            elif path == "/api/eval":
+                self._send(json.dumps(self._rows("eval.jsonl", 500)).encode())
             elif path == "/api/anomalies":
                 self._send(json.dumps(self._rows("anomalies.jsonl", 12)[::-1]).encode())
             elif path == "/api/status":

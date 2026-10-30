@@ -70,3 +70,23 @@ def test_tag_corners_are_square_and_on_the_field():
     assert corners.shape == (len(ids), 4, 3) and len(ids) > 0
     side = np.linalg.norm(corners[:, 0] - corners[:, 1], axis=-1)
     assert np.allclose(side, side[0], rtol=1e-3)
+
+
+def test_live_view_slows_down_while_the_run_trains(tmp_path):
+    """The live view shares the GPU with the learner: 15 fps while log.jsonl is being written, 30 otherwise; the curves
+    page does not open the stream by itself (an open stream makes the server render)."""
+    import os
+    import time
+    from ghosttrain.broadcast import FPS, FPS_TRAINING, TRAINING_IDLE_S, Broadcast
+    from ghosttrain.dashboard import PAGE
+    bc = Broadcast(tmp_path)
+    assert bc.fps() == FPS                                                    # no log yet
+    log = tmp_path / "log.jsonl"
+    log.write_text('{"it": 1, "steps": 10}\n')
+    bc._fps_t = 0.0
+    assert bc.fps() == FPS_TRAINING
+    old = time.time() - TRAINING_IDLE_S - 10
+    os.utime(log, (old, old))
+    bc._fps_t = 0.0
+    assert bc.fps() == FPS
+    assert 'src="/stream.mjpg"' not in PAGE and "setPlay" in PAGE
